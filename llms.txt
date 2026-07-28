@@ -1,0 +1,61 @@
+# @zakkster/lite-aabb
+
+> Zero-GC 2D axis-aligned bounding-box primitives. Twelve operations on a flat `Float32Array(4)` `[minX, minY, maxX, maxY]`. Every op that returns a box writes into a caller-provided `out` buffer. ~120 lines, zero deps, ESM only.
+
+## Format
+
+An AABB is a `Float32Array` of length 4. Indices: `0=minX`, `1=minY`, `2=maxX`, `3=maxY`. No class wrapper; module-level functions only.
+
+## API
+
+Single named export: `aabb2`.
+
+```ts
+aabb2.create(minX?, minY?, maxX?, maxY?): Float32Array  // ALLOCATES — setup only
+aabb2.clone(a): Float32Array                            // ALLOCATES — setup only
+aabb2.copy(out, a): out                                 // out ← a
+aabb2.set(out, minX, minY, maxX, maxY): out             // write explicit bounds
+aabb2.merge(out, a, b): out                             // out ← bbox enclosing a∪b
+aabb2.extend(out, b): out                               // out grows in place to include b
+aabb2.fatten(out, a, margin): out                       // expand by margin on all sides
+aabb2.perimeter(a): number                              // 2 * (w + h)
+aabb2.area(a): number                                   // w * h
+aabb2.overlapArea(a, b): number                         // intersection area, 0 if disjoint
+aabb2.intersects(a, b): boolean                         // overlap test (touching counts)
+aabb2.contains(a, b): boolean                           // a fully contains b (touching counts)
+```
+
+## Rules
+
+- `create` and `clone` allocate — call only at initialization.
+- Every other function takes an `out` parameter and writes into it. None allocate.
+- `out` may alias any input (`merge(a, a, b)`, `fatten(a, a, m)` etc.) — safe.
+- All predicate boundaries are inclusive (touching counts as overlap / contained).
+- Use `Float32Array`, not `Array` or `number[]` — typed-array indexed reads are ~3× faster.
+
+## When to use
+
+- Per-frame collision broadphase in canvas / WebGL / WebGPU games.
+- Bounds-tracking for sprite batchers, scroll viewports, hit-testing.
+- Twitch Extension overlays where any per-frame allocation breaks the 60fps budget.
+- Compatible leaf-AABB format for `@zakkster/lite-bvh` (insert / update / query).
+
+## When not to use
+
+- 3D bounding boxes — this is `(minX, minY, maxX, maxY)` only.
+- Sub-pixel-stable simulations spanning millions of world units — `Float32` precision (~7 decimal digits) becomes limiting; swap to `Float64Array` and pay the doubled memory.
+- Swept-AABB / TOI computation — use a CCD library; this package is for static bounds at a single time step.
+
+## Install
+
+```bash
+npm i @zakkster/lite-aabb
+```
+
+```js
+import { aabb2 } from '@zakkster/lite-aabb';
+```
+
+## License
+
+MIT
