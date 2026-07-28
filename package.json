@@ -1,6 +1,6 @@
 {
   "name": "@zakkster/lite-aabb",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Zero-GC 2D axis-aligned bounding box primitives. Flat Float32Array(4) format [minX, minY, maxX, maxY], every op writes into a caller-provided out buffer — no per-frame allocation. ~100 lines, zero deps, ESM only.",
   "type": "module",
   "main": "./Aabb.js",

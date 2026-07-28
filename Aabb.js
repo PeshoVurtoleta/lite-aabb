@@ -14,9 +14,23 @@
  */
 
 /** Package version. Keep in sync with package.json and CHANGELOG.md (three-place sync). */
-export const VERSION = '1.0.1';
+export const VERSION = '1.0.2';
 
-export const aabb2 = {
+/**
+ * Aliasing contract (see decisions/0001-aliasing.md):
+ *
+ *   `out` may safely alias ANY input, under ANY view relationship -- the same
+ *   view, a shifted/partially-overlapping view of one buffer, or a distinct
+ *   buffer. Every writer below snapshots all of its array inputs into locals
+ *   BEFORE the first write to `out`, so a write can never clobber a slot that a
+ *   later read still needs. These are register-resident locals in V8: no
+ *   allocation is added to any hot body (proven by test/torture t6 + the
+ *   assertOps gate; measured numbers in the decision record).
+ *
+ * The namespace is frozen (A-06): its operations are a contract, not a mutable
+ * bag. Reassigning a method throws in strict mode (ESM is always strict).
+ */
+export const aabb2 = Object.freeze({
     /**
      * Allocates a new AABB. Call once at setup; never in a hot loop.
      * @param {number} [minX=0]
@@ -55,10 +69,12 @@ export const aabb2 = {
      * @returns {Float32Array} `out`
      */
     copy(out, a) {
-        out[0] = a[0];
-        out[1] = a[1];
-        out[2] = a[2];
-        out[3] = a[3];
+        // Snapshot before writing: safe even when `out` is a shifted view of `a`.
+        const a0 = a[0], a1 = a[1], a2 = a[2], a3 = a[3];
+        out[0] = a0;
+        out[1] = a1;
+        out[2] = a2;
+        out[3] = a3;
         return out;
     },
 
@@ -87,10 +103,14 @@ export const aabb2 = {
      * @returns {Float32Array} `out`
      */
     merge(out, a, b) {
-        out[0] = Math.min(a[0], b[0]);
-        out[1] = Math.min(a[1], b[1]);
-        out[2] = Math.max(a[2], b[2]);
-        out[3] = Math.max(a[3], b[3]);
+        // Snapshot both inputs before writing: safe under any aliasing of
+        // `out`, `a`, `b`, including shifted/overlapping views of one buffer.
+        const a0 = a[0], a1 = a[1], a2 = a[2], a3 = a[3];
+        const b0 = b[0], b1 = b[1], b2 = b[2], b3 = b[3];
+        out[0] = Math.min(a0, b0);
+        out[1] = Math.min(a1, b1);
+        out[2] = Math.max(a2, b2);
+        out[3] = Math.max(a3, b3);
         return out;
     },
 
@@ -102,10 +122,14 @@ export const aabb2 = {
      * @returns {Float32Array} `out`
      */
     extend(out, b) {
-        out[0] = Math.min(out[0], b[0]);
-        out[1] = Math.min(out[1], b[1]);
-        out[2] = Math.max(out[2], b[2]);
-        out[3] = Math.max(out[3], b[3]);
+        // `out` is both source and destination. Snapshot both (out and b)
+        // before writing so an overlapping-view `b` reads its pre-write values.
+        const o0 = out[0], o1 = out[1], o2 = out[2], o3 = out[3];
+        const b0 = b[0], b1 = b[1], b2 = b[2], b3 = b[3];
+        out[0] = Math.min(o0, b0);
+        out[1] = Math.min(o1, b1);
+        out[2] = Math.max(o2, b2);
+        out[3] = Math.max(o3, b3);
         return out;
     },
 
@@ -177,10 +201,12 @@ export const aabb2 = {
      * @returns {Float32Array} `out`
      */
     fatten(out, a, margin) {
-        out[0] = a[0] - margin;
-        out[1] = a[1] - margin;
-        out[2] = a[2] + margin;
-        out[3] = a[3] + margin;
+        // Snapshot before writing: safe when `out` is a shifted view of `a`.
+        const a0 = a[0], a1 = a[1], a2 = a[2], a3 = a[3];
+        out[0] = a0 - margin;
+        out[1] = a1 - margin;
+        out[2] = a2 + margin;
+        out[3] = a3 + margin;
         return out;
     }
-};
+});

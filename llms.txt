@@ -29,8 +29,9 @@ aabb2.contains(a, b): boolean                           // a fully contains b (t
 
 - `create` and `clone` allocate — call only at initialization.
 - Every other function takes an `out` parameter and writes into it. None allocate.
-- `out` may alias any input (`merge(a, a, b)`, `fatten(a, a, m)` etc.) — safe.
-- All predicate boundaries are inclusive (touching counts as overlap / contained).
+- `out` may alias any input under any view relationship — identical view, a shifted/overlapping `subarray` of one buffer, or a distinct buffer. The writers snapshot inputs before writing (v1.0.2+; ≤1.0.1 corrupted shifted views — finding A-07).
+- The `aabb2` namespace is frozen (`Object.isFrozen(aabb2) === true`); its ops are a contract, not a mutable bag.
+- All predicate boundaries are inclusive (touching counts as overlap / contained), EXCEPT `overlapArea`, which returns `0` for a touching (zero-width) intersection — a touching pair shares zero area. This three-way split is deliberate.
 - Use `Float32Array`, not `Array` or `number[]` — typed-array indexed reads are ~3× faster.
 
 ## When to use

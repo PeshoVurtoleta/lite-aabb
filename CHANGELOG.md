@@ -4,6 +4,51 @@ All notable changes to `@zakkster/lite-aabb` are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/); this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.2] - 2026-07-28
+
+Aliasing truth + contract pinning. The one behaviour change is a **bug fix**:
+shifted/overlapping `out` views now produce correct results. Callers relying on
+the identical-view or disjoint-buffer cases are unaffected. Decision recorded in
+`decisions/0001-aliasing.md`.
+
+### Fixed
+
+- **A-07** (S1) — the headline aliasing guarantee is now **true unconditionally**.
+  `out` may alias any input under any view relationship, including shifted and
+  partially-overlapping `subarray` views of one backing buffer. The four writers
+  (`copy`, `merge`, `extend`, `fatten`) snapshot every array input into locals
+  before the first write, so a write can no longer clobber a slot a later read
+  needs. On ≤ 1.0.1, `merge`/`fatten`/`copy` over a shifted view silently
+  corrupted the result (e.g. a packed `4*N` buffer where `out` and its neighbour
+  overlap). Measured hot-path cost: zero (register-resident locals, 0 bytes/op;
+  numbers in the decision record). This unblocks the planned 2.0.0 packed batch
+  ops, which are built from exactly this buffer shape.
+
+### Changed
+
+- **A-06** (S3) — `aabb2` is now **frozen** (`Object.freeze`). Runtime
+  monkey-patching of an operation throws in strict mode instead of succeeding.
+  The namespace is a contract, not a mutable bag.
+
+### Pinned (behaviour unchanged, now locked by a named test)
+
+- **A-02** (S3) — the touching-edge convention is pinned in one named test on a
+  single pair: `intersects` → true, `contains` → true, `overlapArea` → `0`. The
+  three-way split (inclusive predicates, zero-area overlap) is deliberate; a
+  touching pair genuinely shares zero area.
+- **A-10** (S3) — the float32 integer boundary (`set(o,0,0,16777217,1)` reads
+  back `16777216`) is pinned by a named test.
+- Torture tier **T2** (previously an empty placeholder) now carries the complete
+  out/a/b aliasing matrix — distinct, identical, shifted views at offsets 1–3 in
+  BOTH overlap directions, disjoint views, and packed-`4*N` neighbour — each
+  verified against a non-aliased oracle (44 cases).
+
+### Still known (fixed in later releases)
+
+- **A-01** (S1, A3), **A-03** (S1, A2), **A-04** (S2, A2), **A-05** (S1, A2) —
+  margin evaporation, NaN incoherence, empty-sentinel infinities, and inverted-box
+  nonsense remain pinned-as-is in torture T1. Unchanged here.
+
 ## [1.0.1] - 2026-07-28
 
 Harness release. **No runtime behaviour changed** — every one of the twelve
@@ -72,5 +117,6 @@ are fixed here.
 - Initial release: twelve zero-allocation 2D AABB operations on a flat
   `Float32Array(4)` `[minX, minY, maxX, maxY]`.
 
+[1.0.2]: https://github.com/PeshoVurtoleta/lite-aabb/releases/tag/v1.0.2
 [1.0.1]: https://github.com/PeshoVurtoleta/lite-aabb/releases/tag/v1.0.1
 [1.0.0]: https://github.com/PeshoVurtoleta/lite-aabb/releases/tag/v1.0.0

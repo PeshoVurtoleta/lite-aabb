@@ -204,17 +204,25 @@ All functions are static (no `this`), live on the `aabb2` namespace, and return 
 
 ## Aliasing rules
 
-The `out` buffer can safely alias the input buffer in every function that takes both:
+The `out` buffer can safely alias **any** input, under **any** view relationship — the identical view, a shifted or partially-overlapping `subarray` of one backing buffer, or a distinct buffer:
 
 ```js
-// All of these are correct and produce the right result:
-aabb2.merge(a, a, b);          // a ← merge(a, b)
-aabb2.merge(b, a, b);          // b ← merge(a, b)
+// All correct and produce the right result:
+aabb2.merge(a, a, b);          // a ← merge(a, b)   (out === a)
+aabb2.merge(b, a, b);          // b ← merge(a, b)   (out === b)
 aabb2.fatten(a, a, 2);         // grow a in place
 aabb2.copy(a, a);              // no-op
+
+// Also correct: out and a are OVERLAPPING views of one buffer.
+const packed = new Float32Array(4 * n);        // n boxes, tightly packed
+const a   = packed.subarray(0, 4);
+const out = packed.subarray(1, 5);             // shifted by 1 — overlaps a
+aabb2.merge(out, a, b);                        // right result, no corruption
 ```
 
-This works because every operation reads each input slot exactly once before writing the corresponding output slot. For four-element arrays this is trivially safe in any order.
+This holds because every writer (`copy`, `merge`, `extend`, `fatten`) **snapshots all of its array inputs into locals before the first write to `out`** — so a write can never clobber a slot a later read still needs. The locals are register-resident in V8: the guarantee costs no allocation and no measurable time on the hot path (the A/B benchmark is recorded in `decisions/0001-aliasing.md` in the [source repository](https://github.com/PeshoVurtoleta/lite-aabb)).
+
+> **Before v1.0.2** this was true only for the *identical* view or disjoint buffers; shifted/overlapping views silently corrupted the result (finding A-07). If you are on ≤ 1.0.1, upgrade — the packed-buffer pattern above was broken.
 
 ---
 

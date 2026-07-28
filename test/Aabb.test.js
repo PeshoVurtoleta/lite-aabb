@@ -11,6 +11,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { measureAllocs } from '@zakkster/lite-gc-profiler';
 import { aabb2, VERSION } from '../Aabb.js';
 
 // Near-equality helpers. Float32 round-trips lose precision, so exact === on
@@ -287,6 +288,106 @@ test('fatten() with out === a (aliasing)', () => {
     const a = aabb2.create(0, 0, 10, 10);
     aabb2.fatten(a, a, 1);
     assertAABB(a, [-1, -1, 11, 11], 'fatten must be safe when out === a');
+});
+
+// =============================================================================
+// ALIASING + CONTRACT (A1: A-02, A-06, A-07, A-10)
+// =============================================================================
+
+test('aabb2 namespace is frozen (A-06)', () => {
+    assert.equal(Object.isFrozen(aabb2), true, 'aabb2 must be frozen');
+    // ESM modules are strict, so reassigning a method throws rather than
+    // silently no-op'ing.
+    assert.throws(() => { aabb2.intersects = () => true; }, TypeError);
+    // The original method is intact after the failed reassignment.
+    assert.equal(typeof aabb2.intersects, 'function');
+});
+
+test('touching-edge convention triad, one pair (A-02)', () => {
+    // A single pair where the shared edge is the boundary case for all three
+    // predicates: `b` is a zero-width box lying exactly on `a`'s right edge.
+    // The three-way split is DELIBERATE (shared law #3):
+    //   - intersects: touching counts as overlap  -> true  (inclusive `>=`)
+    //   - contains:   touching counts as contained -> true  (inclusive `>=`)
+    //   - overlapArea: a zero-width intersection has zero AREA -> 0
+    // overlapArea returning 0 while intersects returns true is not a bug; a
+    // touching pair genuinely shares zero area. Pinned so a refactor can't
+    // quietly flip any one of the three.
+    const a = aabb2.create(0, 0, 10, 10);
+    const b = aabb2.create(10, 0, 10, 10); // zero width, on a's right edge
+    assert.equal(aabb2.intersects(a, b), true, 'intersects: touching counts');
+    assert.equal(aabb2.contains(a, b), true, 'contains: touching counts');
+    assert.equal(aabb2.overlapArea(a, b), 0, 'overlapArea: zero-width -> 0');
+});
+
+test('f32 integer boundary: 16777217 reads back as 16777216 (A-10)', () => {
+    const o = aabb2.create();
+    aabb2.set(o, 0, 0, 16777217, 1);
+    assert.equal(o[2], 16777216, '2**24 + 1 is not representable in float32');
+});
+
+// A-07 regression: `out` may alias any input, including shifted / overlapping
+// views of one buffer. Each writer snapshots its inputs before the first write.
+test('merge is safe when out is a shifted view of a (A-07)', () => {
+    const buf = new Float32Array(8);
+    buf.set([-5, -5, 10, 10, 0, 0, 0, 0]);
+    const a = buf.subarray(0, 4);
+    const out = buf.subarray(1, 5); // overlaps a on slots 1..3
+    const b = aabb2.create(-5, -5, 5, 5);
+    aabb2.merge(out, a, b);
+    assertAABB(out, [-5, -5, 10, 10], 'merge under shifted-view aliasing');
+});
+
+test('fatten is safe when out is a shifted view of a (A-07)', () => {
+    const buf = new Float32Array(8);
+    buf.set([-5, -5, 10, 10, 0, 0, 0, 0]);
+    const a = buf.subarray(0, 4);
+    const out = buf.subarray(1, 5);
+    aabb2.fatten(out, a, 1);
+    assertAABB(out, [-6, -6, 11, 11], 'fatten under shifted-view aliasing');
+});
+
+test('copy is safe when out is a shifted view of a (A-07)', () => {
+    const buf = new Float32Array(8);
+    buf.set([-5, -5, 10, 10, 0, 0, 0, 0]);
+    const a = buf.subarray(0, 4);
+    const out = buf.subarray(1, 5);
+    aabb2.copy(out, a);
+    assertAABB(out, [-5, -5, 10, 10], 'copy under shifted-view aliasing');
+});
+
+test('extend is safe when b is a shifted view of out (A-07)', () => {
+    // out and b overlap: extend must use the pre-write snapshot of both.
+    const buf = new Float32Array(8);
+    buf.set([0, 0, 10, 10, 5, 5, 20, 20], 0);
+    const out = buf.subarray(0, 4); // [0,0,10,10]
+    const b = buf.subarray(4, 8);   // [5,5,20,20], disjoint here
+    aabb2.extend(out, b);
+    assertAABB(out, [0, 0, 20, 20], 'extend with a neighbouring packed box');
+});
+
+test('hardened writers retain 0 bytes/call (requires --expose-gc)', (t) => {
+    if (typeof globalThis.gc !== 'function') {
+        t.skip('run with --expose-gc to enable');
+        return;
+    }
+    const a = aabb2.create(0, 0, 10, 10);
+    const b = aabb2.create(5, 5, 20, 20);
+    const out = aabb2.create();
+    const cases = [
+        ['merge', () => aabb2.merge(out, a, b)],
+        ['fatten', () => aabb2.fatten(out, a, 1)],
+        ['copy', () => aabb2.copy(out, a)],
+        ['extend', () => aabb2.extend(out, b)],
+    ];
+    for (const [name, fn] of cases) {
+        const r = measureAllocs(fn, { iterations: 100_000, warmup: 10_000, batches: 8 });
+        assert.ok(r.settled, `${name}: measurement did not settle`);
+        // < 1 byte/call is the min-over-batches measurement floor; the hardened
+        // bodies add only register-resident locals. torture T6 (maxMajor:0) is
+        // the companion gate.
+        assert.ok(r.bytesPerCall < 1, `${name} retained ${r.bytesPerCall} bytes/call`);
+    }
 });
 
 // =============================================================================

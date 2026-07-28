@@ -18,16 +18,20 @@ export const aabb2: {
     /** Allocates. Call once at setup. */
     clone(a: AABB2): AABB2;
 
-    /** Copies `a` into `out`. Zero allocations. */
+    /** Copies `a` into `out`. Zero allocations. `out` may alias `a` under any view. */
     copy(out: AABB2, a: AABB2): AABB2;
 
     /** Writes explicit bounds into `out`. Zero allocations. */
     set(out: AABB2, minX: number, minY: number, maxX: number, maxY: number): AABB2;
 
-    /** `out = bounding box enclosing both a and b`. Safe when `out` aliases `a` or `b`. */
+    /**
+     * `out = bounding box enclosing both a and b`. `out` may safely alias `a`,
+     * `b`, or a shifted/overlapping view of either (v1.0.2+; see the aliasing
+     * contract). Zero allocations.
+     */
     merge(out: AABB2, a: AABB2, b: AABB2): AABB2;
 
-    /** Enlarges `out` in place to include `b`. Equivalent to `merge(out, out, b)`. */
+    /** Enlarges `out` in place to include `b`. Equivalent to `merge(out, out, b)`. `b` may alias/overlap `out`. */
     extend(out: AABB2, b: AABB2): AABB2;
 
     /** `2 * (width + height)`. Surface Area Heuristic cost in 2D BVHs. */
@@ -45,6 +49,6 @@ export const aabb2: {
     /** True if `a` fully contains `b` (touching edges count). */
     contains(a: AABB2, b: AABB2): boolean;
 
-    /** Expands `a` by `margin` on every side and writes into `out`. Safe when `out === a`. */
+    /** Expands `a` by `margin` on every side and writes into `out`. `out` may alias `a` under any view. */
     fatten(out: AABB2, a: AABB2, margin: number): AABB2;
 };
