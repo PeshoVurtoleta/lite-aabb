@@ -9,7 +9,7 @@
 ![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen?style=for-the-badge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-**Zero-GC 2D axis-aligned bounding-box primitives.** Twelve operations on a flat `Float32Array(4)` — `[minX, minY, maxX, maxY]`. Every op that returns a box writes into a caller-provided `out` buffer. No `new` in your hot loop. No object graphs. ~120 lines of code.
+**Zero-GC 2D axis-aligned bounding-box primitives.** Fifteen operations on a flat `Float32Array(4)` — `[minX, minY, maxX, maxY]`. Every op that returns a box writes into a caller-provided `out` buffer. No `new` in your hot loop. No object graphs. ~150 lines of code.
 
 ```js
 import { aabb2 } from '@zakkster/lite-aabb';
@@ -36,6 +36,7 @@ if (aabb2.intersects(swept, wall)) {
 - [The flat-array convention](#the-flat-array-convention)
 - [API reference](#api-reference)
 - [Aliasing rules](#aliasing-rules)
+- [Validity & degenerate values](#validity--degenerate-values)
 - [Compatibility with `@zakkster/lite-bvh`](#compatibility-with-zaksterlite-bvh)
 - [Testing](#testing)
 - [License](#license)
@@ -112,14 +113,14 @@ function update(dx, dy) {
 ### Common idioms
 
 ```js
-// Initialize a "min bounds" reducer (a box that will be merged into).
-const bounds = aabb2.create(Infinity, Infinity, -Infinity, -Infinity);
-for (const point of points) {
-    bounds[0] = Math.min(bounds[0], point.x);
-    bounds[1] = Math.min(bounds[1], point.y);
-    bounds[2] = Math.max(bounds[2], point.x);
-    bounds[3] = Math.max(bounds[3], point.y);
+// Initialize a "min bounds" reducer with the canonical empty box — it is the
+// identity of merge/extend, so the first box merged in lands exactly.
+const bounds = aabb2.setEmpty(aabb2.create());
+for (const box of boxes) {
+    aabb2.extend(bounds, box);
 }
+// Guard the result before trusting its geometry (e.g. before perimeter/area).
+if (!aabb2.isValid(bounds)) { /* no boxes, or a NaN slipped in */ }
 
 // Union N boxes into one (in-place reduction).
 aabb2.copy(out, boxes[0]);
@@ -191,7 +192,7 @@ All functions are static (no `this`), live on the `aabb2` namespace, and return 
 |---|---|---|
 | `aabb2.perimeter(a)` | `number` | `2 * (width + height)`. The Surface Area Heuristic cost in 2D BVHs. |
 | `aabb2.area(a)` | `number` | `width * height`. |
-| `aabb2.overlapArea(a, b)` | `number` | Area of the intersection. `0` if they don't overlap. Touching edges produce `0`. |
+| `aabb2.overlapArea(a, b)` | `number` | Area of the intersection. `0` if they don't overlap; touching edges produce `0`. Returns `NaN` if either box carries a `NaN` coordinate (v1.1.0+ — see [validity](#validity--degenerate-values)). |
 
 ### Predicates
 
@@ -199,6 +200,14 @@ All functions are static (no `this`), live on the `aabb2` namespace, and return 
 |---|---|---|
 | `aabb2.intersects(a, b)` | `boolean` | True if `a` and `b` overlap. **Touching edges count as overlap** (`>=` comparison). |
 | `aabb2.contains(a, b)` | `boolean` | True if `a` fully contains `b`. Touching edges count as contained. |
+
+### Validity & empties — zero allocation *(v1.1.0+)*
+
+| Function | Returns | Description |
+|---|---|---|
+| `aabb2.isValid(a)` | `boolean` | True iff all four coordinates are finite **and** `min <= max` on both axes. The boundary check — false for NaN, mixed infinities, and inverted boxes; true for zero-size boxes. |
+| `aabb2.isEmpty(a)` | `boolean` | True iff `a` is exactly the canonical empty sentinel `[Inf, Inf, -Inf, -Inf]`. |
+| `aabb2.setEmpty(out)` | `out` | Writes the canonical empty box — the correct seed for a `merge`/`extend` reduction. |
 
 ---
 
@@ -223,6 +232,39 @@ aabb2.merge(out, a, b);                        // right result, no corruption
 This holds because every writer (`copy`, `merge`, `extend`, `fatten`) **snapshots all of its array inputs into locals before the first write to `out`** — so a write can never clobber a slot a later read still needs. The locals are register-resident in V8: the guarantee costs no allocation and no measurable time on the hot path (the A/B benchmark is recorded in `decisions/0001-aliasing.md` in the [source repository](https://github.com/PeshoVurtoleta/lite-aabb)).
 
 > **Before v1.0.2** this was true only for the *identical* view or disjoint buffers; shifted/overlapping views silently corrupted the result (finding A-07). If you are on ≤ 1.0.1, upgrade — the packed-buffer pattern above was broken.
+
+---
+
+## Validity & degenerate values
+
+*(v1.1.0+)* The twelve geometry ops are **total and branchless** — they never throw and never validate. That keeps the hot path fast, but it means a broken box (a `NaN`, an infinity, an inverted `min > max`) produces a nonsense number rather than an error. The rule the library follows, and the rule you apply at your own trust boundaries:
+
+**NaN propagates — it is never laundered.** A `NaN` coordinate yields `NaN` from every numeric op, `overlapArea` included (it used to launder `NaN` to `0`; that was the incoherence fixed in v1.1.0). Every box is one of three states:
+
+| State | Test | Meaning |
+|---|---|---|
+| **Valid** | `isValid(a) === true` | Four finite coordinates, `min <= max`. Safe to do geometry with. |
+| **Empty** | `isEmpty(a) === true` | The canonical sentinel `[Inf, Inf, -Inf, -Inf]` — the identity of `merge`/`extend`. Build it with `setEmpty`. |
+| **Garbage** | both `false` | NaN, mixed infinities, or inverted. The caller's bug. |
+
+```js
+// Build a reducer seed, accumulate, then verify before trusting the result.
+const bounds = aabb2.setEmpty(aabb2.create());
+for (const b of boxes) aabb2.extend(bounds, b);
+
+if (aabb2.isValid(bounds)) {
+    const cost = aabb2.perimeter(bounds);   // safe: bounds is a real box
+} else {
+    // boxes was empty (still the sentinel), or one carried a NaN.
+}
+```
+
+Two deliberate consequences worth knowing:
+
+- **The empty sentinel is not `isValid`.** It is non-finite by construction, and its `perimeter`/`area` are `-Infinity`/`+Infinity`. `isValid` answers "safe to do geometry"; for the sentinel that is *no*. Use `isEmpty` to recognize it. Do not feed a never-merged sentinel to `perimeter` (e.g. as a BVH cost) without checking first — [`@zakkster/lite-bvh`](https://www.npmjs.com/package/@zakkster/lite-bvh) quarantines it for exactly this reason.
+- **Inverted boxes are the caller's bug.** Negative margins are permitted (`fatten(out, a, -m)` shrinks), but shrinking past zero gives `min > max`, whose `area` is *positive* and which does *not* intersect itself. The library does not stop you; `isValid` is how you detect it.
+
+The full law and the (zero) measured hot-path cost are in `decisions/0002-degenerate-values.md` in the [source repository](https://github.com/PeshoVurtoleta/lite-aabb).
 
 ---
 
@@ -260,25 +302,28 @@ There is **no runtime dependency** between the two packages — they just agree 
 ## Testing
 
 ```bash
-npm test
-# or: node --expose-gc Aabb.test.js
+npm test          # node --test (unit suite)
+npm run torture   # node --expose-gc test/torture.mjs -> prints "ok"
+npm run verify    # both, in sequence
 ```
 
-Runs 37 deterministic assertions covering:
+The `node:test` unit suite covers:
 
 | Group | What's tested |
 |---|---|
 | Construction + copy | defaults, explicit values, independence of clones, return-`out` contract |
 | `merge` / `extend` | non-overlapping, overlapping, contained, negative coords, aliasing |
 | `perimeter` / `area` | unit, rectangle, zero-size |
-| `overlapArea` | identical, partial, disjoint, touching edges, containment |
+| `overlapArea` | identical, partial, disjoint, touching edges, containment, NaN propagation |
 | `intersects` / `contains` | overlap, touching, disjoint, axis-separated, self-containment, symmetry |
 | `fatten` | positive/zero/negative margins, aliasing |
-| **Zero-allocation guarantee** | 500 000 mixed ops → heap growth < 256 KB under `--expose-gc` |
+| **Aliasing & contract** | frozen namespace, touching-edge triad, f32 boundary, shifted-view (A-07) |
+| **Degenerate-value law** | `isValid`/`isEmpty`/`setEmpty` tri-state, empty as merge identity, NaN propagation, inverted-box detection |
+| **Zero-allocation guarantee** | mixed ops → heap growth budget under `--expose-gc`, plus per-op `measureAllocs` |
 
-The zero-alloc test requires the `--expose-gc` flag — without it the test is skipped (with a yellow warning) rather than failing, so CI runs without flags still go green.
+The zero-alloc tests require the `--expose-gc` flag — without it they skip (rather than fail), so CI runs without flags still go green. `npm test` sets the flag for you.
 
-A clean run ends with `37 passed, 0 failed` and exit code `0`. Any failure prints the assertion plus the expected/actual values.
+The authoritative zero-GC proof is the **torture gate** (`test/torture.mjs`): metamorphic laws, the complete degenerate-value matrix, the aliasing matrix, a `maxMajor: 0` GC budget, a soak, and controls that prove every gate can fail. It prints exactly `ok` and exits `0` on pass; `TORTURE_CONTROL=alloc` makes it exit non-zero on demand.
 
 ---
 

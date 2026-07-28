@@ -14,7 +14,7 @@
  */
 
 /** Package version. Keep in sync with package.json and CHANGELOG.md (three-place sync). */
-export const VERSION = '1.0.2';
+export const VERSION = '1.1.0';
 
 /**
  * Aliasing contract (see decisions/0001-aliasing.md):
@@ -29,6 +29,18 @@ export const VERSION = '1.0.2';
  *
  * The namespace is frozen (A-06): its operations are a contract, not a mutable
  * bag. Reassigning a method throws in strict mode (ESM is always strict).
+ *
+ * Degenerate-value law (see decisions/0002-degenerate-values.md):
+ *
+ *   NaN propagates -- it is never laundered into a clean number. Every box is
+ *   one of three states: VALID (four finite coordinates, min <= max), EMPTY
+ *   (the canonical sentinel [Inf,Inf,-Inf,-Inf], a merge identity), or GARBAGE
+ *   (NaN, mixed infinities, or inverted). The hot ops are TOTAL but only
+ *   meaningful on valid boxes: geometry on a non-valid box returns whatever the
+ *   arithmetic yields -- it never throws and never allocates. Gate at trust
+ *   boundaries with `isValid`; recognize / build the empty box with `isEmpty` /
+ *   `setEmpty`. Validation is never bolted into a hot op (the one carve-out is
+ *   `overlapArea`, which stops laundering NaN -- measured cost in the record).
  */
 export const aabb2 = Object.freeze({
     /**
@@ -168,7 +180,11 @@ export const aabb2 = Object.freeze({
         const maxY = Math.min(a[3], b[3]);
         const wx = maxX - minX;
         const wy = maxY - minY;
-        return wx > 0 && wy > 0 ? wx * wy : 0;
+        if (wx > 0 && wy > 0) return wx * wy;
+        // NaN in -> NaN out (A-03): a NaN coordinate poisons wx/wy, and we
+        // propagate it instead of laundering it to a clean 0. A genuine
+        // non-overlap (finite, touching or disjoint) still returns 0.
+        return wx !== wx || wy !== wy ? NaN : 0;
     },
 
     /**
@@ -207,6 +223,57 @@ export const aabb2 = Object.freeze({
         out[1] = a1 - margin;
         out[2] = a2 + margin;
         out[3] = a3 + margin;
+        return out;
+    },
+
+    // --- degenerate-value law (A2, see decisions/0002-degenerate-values.md) ---
+    // Opt-in predicates + sentinel builder. These are NEW surface; they are how
+    // a caller checks a box at a trust boundary. They are NOT guards bolted into
+    // the twelve ops above -- those stay branchless (the sole exception is
+    // overlapArea's NaN check).
+
+    /**
+     * True if `a` is a box you can safely do geometry with: all four
+     * coordinates finite AND `min <= max` on both axes. False for NaN, for
+     * mixed infinities, and for inverted boxes; true for zero-size boxes. The
+     * canonical empty sentinel is NOT valid (it is non-finite by construction)
+     * -- recognize it with `isEmpty`. Zero allocations.
+     * @param {Float32Array} a
+     * @returns {boolean}
+     */
+    isValid(a) {
+        return Number.isFinite(a[0]) && Number.isFinite(a[1]) &&
+               Number.isFinite(a[2]) && Number.isFinite(a[3]) &&
+               a[0] <= a[2] && a[1] <= a[3];
+    },
+
+    /**
+     * True if `a` is exactly the canonical empty box `[Inf, Inf, -Inf, -Inf]`.
+     * That box is the identity of `merge`/`extend` (min/max collapse to the
+     * other operand), so it is the correct seed for an accumulating reducer.
+     * Zero allocations.
+     * @param {Float32Array} a
+     * @returns {boolean}
+     */
+    isEmpty(a) {
+        return a[0] === Infinity && a[1] === Infinity &&
+               a[2] === -Infinity && a[3] === -Infinity;
+    },
+
+    /**
+     * Writes the canonical empty box `[Inf, Inf, -Inf, -Inf]` into `out` and
+     * returns it. Use this as the seed for a `merge`/`extend` reduction instead
+     * of hand-rolling the sentinel. Do NOT call `area`/`perimeter` on the empty
+     * box (they are `+Infinity`/`-Infinity`); guard with `isValid` first.
+     * Zero allocations.
+     * @param {Float32Array} out
+     * @returns {Float32Array} `out`
+     */
+    setEmpty(out) {
+        out[0] = Infinity;
+        out[1] = Infinity;
+        out[2] = -Infinity;
+        out[3] = -Infinity;
         return out;
     }
 });

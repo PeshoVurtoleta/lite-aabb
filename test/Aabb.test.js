@@ -34,9 +34,9 @@ function assertAABB(box, [minX, minY, maxX, maxY], msg = 'aabb mismatch') {
 // PACKAGE SURFACE
 // =============================================================================
 
-test('VERSION is exported and matches 1.0.x', () => {
+test('VERSION is exported and is a 1.x semver', () => {
     assert.equal(typeof VERSION, 'string');
-    assert.match(VERSION, /^1\.0\.\d+$/);
+    assert.match(VERSION, /^1\.\d+\.\d+$/);
 });
 
 // =============================================================================
@@ -386,6 +386,100 @@ test('hardened writers retain 0 bytes/call (requires --expose-gc)', (t) => {
         // < 1 byte/call is the min-over-batches measurement floor; the hardened
         // bodies add only register-resident locals. torture T6 (maxMajor:0) is
         // the companion gate.
+        assert.ok(r.bytesPerCall < 1, `${name} retained ${r.bytesPerCall} bytes/call`);
+    }
+});
+
+// =============================================================================
+// DEGENERATE-VALUE LAW (A2: A-03, A-04, A-05; decisions/0002)
+// =============================================================================
+
+// The law: NaN propagates (never laundered), and every box is one of three
+// states -- VALID, EMPTY (the sentinel), or GARBAGE -- distinguished by the new
+// opt-in predicates. The twelve hot ops stay branchless; the sole behaviour
+// change is overlapArea, which stops laundering NaN.
+
+test('isValid: valid boxes (incl. zero-size) are valid', () => {
+    assert.equal(aabb2.isValid(aabb2.create(0, 0, 10, 10)), true, 'plain box');
+    assert.equal(aabb2.isValid(aabb2.create(-5, -5, 5, 5)), true, 'zero-straddling');
+    assert.equal(aabb2.isValid(aabb2.create(5, 5, 5, 5)), true, 'zero-size is valid');
+    assert.equal(aabb2.isValid(aabb2.create(5, 5, 5, 10)), true, 'single-axis-degenerate is valid');
+});
+
+test('isValid: garbage boxes are not valid', () => {
+    assert.equal(aabb2.isValid(aabb2.create(NaN, NaN, NaN, NaN)), false, 'NaN (A-03)');
+    assert.equal(aabb2.isValid(aabb2.create(0, 0, NaN, 10)), false, 'one NaN slot');
+    assert.equal(aabb2.isValid(aabb2.create(5, 5, 0, 0)), false, 'inverted (A-05)');
+    assert.equal(aabb2.isValid(aabb2.create(5, 0, 0, 10)), false, 'inverted on one axis');
+    assert.equal(aabb2.isValid(aabb2.create(0, 0, Infinity, 10)), false, 'infinity-mixed (A-04)');
+});
+
+test('isValid: the empty sentinel is NOT valid (documented)', () => {
+    // The sentinel is non-finite by construction; isValid answers "safe to do
+    // geometry", and the answer is no. isEmpty is its separate recognizer.
+    const empty = aabb2.setEmpty(aabb2.create());
+    assert.equal(aabb2.isValid(empty), false, 'sentinel is not valid');
+    assert.equal(aabb2.isEmpty(empty), true, 'sentinel is empty');
+});
+
+test('isEmpty / setEmpty: the canonical empty box', () => {
+    const e = aabb2.create();
+    const r = aabb2.setEmpty(e);
+    assert.ok(r === e, 'setEmpty returns out');
+    assert.equal(e[0], Infinity);
+    assert.equal(e[1], Infinity);
+    assert.equal(e[2], -Infinity);
+    assert.equal(e[3], -Infinity);
+    assert.equal(aabb2.isEmpty(e), true, 'isEmpty of the sentinel');
+    assert.equal(aabb2.isEmpty(aabb2.create(0, 0, 10, 10)), false, 'isEmpty of a real box');
+    assert.equal(aabb2.isEmpty(aabb2.create(5, 5, 0, 0)), false, 'inverted is not empty');
+});
+
+test('empty box is the merge/extend identity: merge(out, empty, b) === copy', () => {
+    const b = aabb2.create(-3, 7, 4, 9);
+    const viaMerge = aabb2.merge(aabb2.create(), aabb2.setEmpty(aabb2.create()), b);
+    const viaCopy = aabb2.copy(aabb2.create(), b);
+    assert.deepEqual([...viaMerge], [...viaCopy], 'empty is the reducer identity');
+    // and extend from an empty seed lands exactly on b
+    const acc = aabb2.setEmpty(aabb2.create());
+    aabb2.extend(acc, b);
+    assert.deepEqual([...acc], [...viaCopy], 'extend from empty seed === b');
+});
+
+test('overlapArea propagates NaN instead of laundering to 0 (A-03, changed in A2)', () => {
+    const good = aabb2.create(0, 0, 10, 10);
+    const nan = aabb2.create(NaN, NaN, NaN, NaN);
+    assert.ok(Number.isNaN(aabb2.overlapArea(good, nan)), 'NaN in -> NaN out');
+    assert.ok(Number.isNaN(aabb2.overlapArea(good, aabb2.create(5, 5, NaN, 15))), 'one NaN slot poisons');
+    // finite non-overlap and finite overlap are unchanged
+    assert.equal(aabb2.overlapArea(good, aabb2.create(20, 20, 30, 30)), 0, 'finite disjoint still 0');
+    assertNear(aabb2.overlapArea(good, aabb2.create(5, 5, 15, 15)), 25, 1e-5, 'finite overlap unchanged');
+});
+
+test('inverted-box policy: area stays positive, isValid is the detector (A-05)', () => {
+    // A2 does not change the arithmetic; it ships the detector. Negative margins
+    // are permitted; an inverted result is the caller's bug, found via isValid.
+    const shrunk = aabb2.fatten(aabb2.create(), aabb2.create(0, 0, 2, 2), -3);
+    assertAABB(shrunk, [3, 3, -1, -1], 'fatten(-3) inverts');
+    assert.equal(aabb2.area(shrunk), 16, 'inverted area is still +16 (unchanged)');
+    assert.equal(aabb2.isValid(shrunk), false, 'isValid detects the inversion');
+});
+
+test('new predicates/setEmpty retain 0 bytes/call (requires --expose-gc)', (t) => {
+    if (typeof globalThis.gc !== 'function') {
+        t.skip('run with --expose-gc to enable');
+        return;
+    }
+    const a = aabb2.create(0, 0, 10, 10);
+    const out = aabb2.create();
+    const cases = [
+        ['isValid', () => aabb2.isValid(a)],
+        ['isEmpty', () => aabb2.isEmpty(a)],
+        ['setEmpty', () => aabb2.setEmpty(out)],
+    ];
+    for (const [name, fn] of cases) {
+        const r = measureAllocs(fn, { iterations: 100_000, warmup: 10_000, batches: 8 });
+        assert.ok(r.settled, `${name}: measurement did not settle`);
         assert.ok(r.bytesPerCall < 1, `${name} retained ${r.bytesPerCall} bytes/call`);
     }
 });

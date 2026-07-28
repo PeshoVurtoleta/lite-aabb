@@ -4,6 +4,67 @@ All notable changes to `@zakkster/lite-aabb` are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/); this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-07-29
+
+The degenerate-value law. One coherent answer to "what does a broken box mean",
+plus the tools to apply it. The one behaviour change is a **bug fix**:
+`overlapArea` stops laundering `NaN` into `0`. Decision recorded in
+`decisions/0002-degenerate-values.md`.
+
+### Added
+
+- **`isValid(a)`** -- true iff all four coordinates are finite AND `min <= max`
+  on both axes. The opt-in check for a trust boundary. False for NaN, mixed
+  infinities, and inverted boxes; true for zero-size boxes. Zero allocations.
+- **`isEmpty(a)`** -- true iff `a` is exactly the canonical empty sentinel
+  `[Inf, Inf, -Inf, -Inf]`, which is the identity of `merge`/`extend`. Zero
+  allocations.
+- **`setEmpty(out)`** -- writes the canonical empty box into `out`; the correct
+  seed for a `merge`/`extend` reduction. Replaces the README's old advice to
+  hand-roll `create(Inf, Inf, -Inf, -Inf)`. Zero allocations.
+
+  The law: **NaN propagates, never launders**; every box is **VALID**, **EMPTY**,
+  or **GARBAGE**, distinguished by these predicates. Geometry on a non-valid box
+  is total but only meaningful on valid boxes -- validation lives at boundaries,
+  never inside a hot op.
+
+### Changed
+
+- **A-03** (S1) -- `overlapArea` now **propagates `NaN`** instead of laundering
+  it to `0`. A box carrying a `NaN` coordinate yields `NaN`; a genuine finite
+  non-overlap still returns `0`, and finite overlap is unchanged. This makes the
+  NaN policy consistent with `area`/`merge`/`extend` (which already propagate).
+  The fast (overlapping) path is byte-for-byte identical; the added compares are
+  on the cold path only, at no measurable hot-path cost (numbers in the decision
+  record). This is the only pinned answer that flips in this release.
+
+### Fixed (at the API layer -- hot bodies unchanged)
+
+- **A-04** (S2) -- the empty-sentinel footgun is closed by shipping `setEmpty`
+  (so users stop hand-rolling it) and `isEmpty`/`isValid` (so `@zakkster/lite-bvh`
+  can quarantine it before it reaches `perimeter` as an SAH cost). The raw
+  `perimeter`/`area` of the sentinel are deliberately **unchanged** (`-Infinity`
+  /`+Infinity`): making them `0` would require a branch in a hot op, which the
+  law forbids. The sentinel is now a recognized value, not a silent trap.
+
+### Documented (behaviour unchanged, now with a detector)
+
+- **A-05** (S1) -- inverted-box policy is explicit: negative margins are
+  permitted, an inverted result (`min > max`) is the CALLER's bug, and `isValid`
+  is how they detect it. `area` of an inverted box stays positive; the
+  arithmetic is not changed. Pinned in torture T1.
+- Torture tier **T1** is now **complete**: every op crossed with every
+  degenerate value (both infinities, the sentinel, NaN in one and all slots,
+  subnormals, f32 max, the integer boundary, one-ulp-apart, zero-size,
+  single-axis-degenerate, inverted on one and both axes, zero-straddling)
+  against an independent float64 oracle. T9 gains a control proving the
+  `isValid` gate is falsifiable.
+
+### Still known (fixed in later releases)
+
+- **A-01** (S1, A3) -- margin evaporation below half a float32 ULP. Unchanged
+  here; pinned in torture T1.
+
 ## [1.0.2] - 2026-07-28
 
 Aliasing truth + contract pinning. The one behaviour change is a **bug fix**:
@@ -117,6 +178,7 @@ are fixed here.
 - Initial release: twelve zero-allocation 2D AABB operations on a flat
   `Float32Array(4)` `[minX, minY, maxX, maxY]`.
 
+[1.1.0]: https://github.com/PeshoVurtoleta/lite-aabb/releases/tag/v1.1.0
 [1.0.2]: https://github.com/PeshoVurtoleta/lite-aabb/releases/tag/v1.0.2
 [1.0.1]: https://github.com/PeshoVurtoleta/lite-aabb/releases/tag/v1.0.1
 [1.0.0]: https://github.com/PeshoVurtoleta/lite-aabb/releases/tag/v1.0.0

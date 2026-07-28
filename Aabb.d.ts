@@ -40,7 +40,11 @@ export const aabb2: {
     /** `width * height`. Negative for inverted boxes (don't do that). */
     area(a: AABB2): number;
 
-    /** Area of the intersection of `a` and `b`. Returns `0` if they don't overlap. */
+    /**
+     * Area of the intersection of `a` and `b`. Returns `0` for a genuine
+     * non-overlap, but **`NaN` if either box carries a `NaN` coordinate**
+     * (v1.1.0+: NaN propagates, it is no longer laundered to `0`).
+     */
     overlapArea(a: AABB2, b: AABB2): number;
 
     /** True if `a` and `b` overlap (touching counts as overlapping). */
@@ -51,4 +55,17 @@ export const aabb2: {
 
     /** Expands `a` by `margin` on every side and writes into `out`. `out` may alias `a` under any view. */
     fatten(out: AABB2, a: AABB2, margin: number): AABB2;
+
+    /**
+     * True if `a` is safe to do geometry with: four finite coordinates and
+     * `min <= max` on both axes. False for NaN, mixed infinities, and inverted
+     * boxes. The empty sentinel is not valid -- use `isEmpty`. (v1.1.0+)
+     */
+    isValid(a: AABB2): boolean;
+
+    /** True if `a` is exactly the canonical empty box `[Inf, Inf, -Inf, -Inf]`. (v1.1.0+) */
+    isEmpty(a: AABB2): boolean;
+
+    /** Writes the canonical empty box `[Inf, Inf, -Inf, -Inf]` into `out`; the seed for a merge/extend reduction. (v1.1.0+) */
+    setEmpty(out: AABB2): AABB2;
 };

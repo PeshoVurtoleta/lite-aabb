@@ -56,6 +56,14 @@ export function run(h) {
         h.assertOk('control', aabb2.contains(small, big), 'small contains big (false)');
     }, 'assertOk accepts a false law');
 
+    // Control E -- the A2 degenerate-law predicate gate must be falsifiable: a
+    // claim that a NaN box isValid (it is not) must be rejected. Proves T1's new
+    // isValid/isEmpty pins can actually fail.
+    expectThrows(h, () => {
+        const nan = aabb2.set(new Float32Array(4), NaN, NaN, NaN, NaN);
+        h.assertOk('control', aabb2.isValid(nan), 'isValid(NaN) is true (false)');
+    }, 'assertOk accepts isValid(NaN)===true');
+
     // Control D -- the T7 conservation oracle must notice a leaked resource.
     expectThrows(h, () => {
         const tracker = createLeakTracker({ name: 'control-leak' });

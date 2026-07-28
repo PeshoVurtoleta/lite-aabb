@@ -1,6 +1,6 @@
 # @zakkster/lite-aabb
 
-> Zero-GC 2D axis-aligned bounding-box primitives. Twelve operations on a flat `Float32Array(4)` `[minX, minY, maxX, maxY]`. Every op that returns a box writes into a caller-provided `out` buffer. ~120 lines, zero deps, ESM only.
+> Zero-GC 2D axis-aligned bounding-box primitives. Fifteen operations on a flat `Float32Array(4)` `[minX, minY, maxX, maxY]`. Every op that returns a box writes into a caller-provided `out` buffer. ~150 lines, zero deps, ESM only.
 
 ## Format
 
@@ -20,9 +20,12 @@ aabb2.extend(out, b): out                               // out grows in place to
 aabb2.fatten(out, a, margin): out                       // expand by margin on all sides
 aabb2.perimeter(a): number                              // 2 * (w + h)
 aabb2.area(a): number                                   // w * h
-aabb2.overlapArea(a, b): number                         // intersection area, 0 if disjoint
+aabb2.overlapArea(a, b): number                         // intersection area, 0 if disjoint, NaN if a NaN coord (v1.1.0+)
 aabb2.intersects(a, b): boolean                         // overlap test (touching counts)
 aabb2.contains(a, b): boolean                           // a fully contains b (touching counts)
+aabb2.isValid(a): boolean                               // finite x4 AND min<=max (v1.1.0+)
+aabb2.isEmpty(a): boolean                               // a === [Inf,Inf,-Inf,-Inf] exactly (v1.1.0+)
+aabb2.setEmpty(out): out                                // write canonical empty box; merge/extend identity (v1.1.0+)
 ```
 
 ## Rules
@@ -32,6 +35,7 @@ aabb2.contains(a, b): boolean                           // a fully contains b (t
 - `out` may alias any input under any view relationship — identical view, a shifted/overlapping `subarray` of one buffer, or a distinct buffer. The writers snapshot inputs before writing (v1.0.2+; ≤1.0.1 corrupted shifted views — finding A-07).
 - The `aabb2` namespace is frozen (`Object.isFrozen(aabb2) === true`); its ops are a contract, not a mutable bag.
 - All predicate boundaries are inclusive (touching counts as overlap / contained), EXCEPT `overlapArea`, which returns `0` for a touching (zero-width) intersection — a touching pair shares zero area. This three-way split is deliberate.
+- Degenerate-value law (v1.1.0+): NaN propagates, never launders — a NaN coordinate yields NaN from every numeric op including `overlapArea`. Every box is VALID (`isValid`: finite x4 AND min<=max), EMPTY (`isEmpty`: the sentinel `[Inf,Inf,-Inf,-Inf]`, the merge/extend identity, built by `setEmpty`), or GARBAGE. The twelve geometry ops are total and branchless — they do NOT validate; check `isValid` at trust boundaries. The empty sentinel is NOT `isValid` (non-finite by construction; its perimeter/area are -Inf/+Inf) — recognize it with `isEmpty`. Inverted boxes (min>max, e.g. from an over-negative `fatten` margin) have positive `area` and do not self-intersect; that is the caller's bug, detected by `isValid`.
 - Use `Float32Array`, not `Array` or `number[]` — typed-array indexed reads are ~3× faster.
 
 ## When to use
