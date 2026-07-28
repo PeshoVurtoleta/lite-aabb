@@ -8,6 +8,9 @@
 /** An axis-aligned bounding box: a length-4 `Float32Array` `[minX, minY, maxX, maxY]`. */
 export type AABB2 = Float32Array;
 
+/** Package version. Kept in sync with package.json and CHANGELOG.md. */
+export const VERSION: string;
+
 export const aabb2: {
     /** Allocates. Call once at setup. */
     create(minX?: number, minY?: number, maxX?: number, maxY?: number): AABB2;

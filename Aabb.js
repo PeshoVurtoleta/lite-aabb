@@ -1,10 +1,10 @@
 /**
- * @zakkster/lite-aabb — Zero-GC 2D Axis-Aligned Bounding Boxes
+ * @zakkster/lite-aabb -- Zero-GC 2D Axis-Aligned Bounding Boxes
  *
  * Format: Float32Array(4) -> [minX, minY, maxX, maxY]
  *
  * Every operation that returns an AABB writes into a caller-provided `out`
- * buffer. The only allocators are `create()` and `clone()` — call them at
+ * buffer. The only allocators are `create()` and `clone()` -- call them at
  * initialization, never in your hot loop.
  *
  * Compatible with the leaf-AABB format expected by `@zakkster/lite-bvh`.
@@ -12,6 +12,9 @@
  * @license MIT
  * @author Zahary Shinikchiev
  */
+
+/** Package version. Keep in sync with package.json and CHANGELOG.md (three-place sync). */
+export const VERSION = '1.0.1';
 
 export const aabb2 = {
     /**

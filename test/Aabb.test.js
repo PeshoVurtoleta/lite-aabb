@@ -1,42 +1,25 @@
 /**
- * @zakkster/lite-aabb — unit tests
+ * @zakkster/lite-aabb -- unit tests (node:test)
  *
- * Plain Node. Run with:
- *   node --expose-gc Aabb.test.js
+ * Run with:
+ *   node --test test/*.test.js
  *
- * The `--expose-gc` flag is only needed for the zero-allocation guarantee
- * test at the bottom; everything else runs fine without it.
+ * The zero-allocation guarantee test at the bottom needs `--expose-gc`; it
+ * skips (does not fail) when the flag is absent. The torture gate
+ * (test/torture.mjs) is the authoritative zero-GC proof.
  */
 
-import { aabb2 } from '../Aabb.d.ts';
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { aabb2, VERSION } from '../Aabb.js';
 
-let passed = 0, failed = 0;
-const failures = [];
-
-function test(name, fn) {
-    try {
-        fn();
-        passed++;
-        console.log(`\x1b[32m✓\x1b[0m ${name}`);
-    } catch (e) {
-        failed++;
-        failures.push({ name, message: e.message });
-        console.error(`\x1b[31m✗\x1b[0m ${name}\n    ${e.message}`);
-    }
-}
-
-function assert(cond, msg = 'assertion failed') {
-    if (!cond) throw new Error(msg);
-}
-
-function assertEq(a, b, msg) {
-    if (a !== b) throw new Error(`${msg || 'expected equal'}: got ${a}, expected ${b}`);
-}
-
+// Near-equality helpers. Float32 round-trips lose precision, so exact === on
+// stored coordinates is wrong; compare within an epsilon instead.
 function assertNear(a, b, eps = 1e-5, msg) {
-    if (Math.abs(a - b) > eps) {
-        throw new Error(`${msg || 'expected near'}: got ${a}, expected ${b} (eps ${eps})`);
-    }
+    assert.ok(
+        Math.abs(a - b) <= eps,
+        `${msg || 'expected near'}: got ${a}, expected ${b} (eps ${eps})`
+    );
 }
 
 function assertAABB(box, [minX, minY, maxX, maxY], msg = 'aabb mismatch') {
@@ -47,13 +30,22 @@ function assertAABB(box, [minX, minY, maxX, maxY], msg = 'aabb mismatch') {
 }
 
 // =============================================================================
+// PACKAGE SURFACE
+// =============================================================================
+
+test('VERSION is exported and matches 1.0.x', () => {
+    assert.equal(typeof VERSION, 'string');
+    assert.match(VERSION, /^1\.0\.\d+$/);
+});
+
+// =============================================================================
 // CREATION + COPY
 // =============================================================================
 
 test('create() with no args -> zero box', () => {
     const a = aabb2.create();
-    assert(a instanceof Float32Array, 'must be Float32Array');
-    assertEq(a.length, 4, 'length');
+    assert.ok(a instanceof Float32Array, 'must be Float32Array');
+    assert.equal(a.length, 4, 'length');
     assertAABB(a, [0, 0, 0, 0]);
 });
 
@@ -65,24 +57,24 @@ test('create() with explicit values', () => {
 test('clone() produces independent copy', () => {
     const a = aabb2.create(1, 2, 3, 4);
     const b = aabb2.clone(a);
-    assert(a !== b, 'must be a different reference');
+    assert.ok(a !== b, 'must be a different reference');
     assertAABB(b, [1, 2, 3, 4]);
     b[0] = 99;
-    assertEq(a[0], 1, 'mutating clone must not affect original');
+    assert.equal(a[0], 1, 'mutating clone must not affect original');
 });
 
 test('copy() writes into out, returns out', () => {
     const a = aabb2.create(1, 2, 3, 4);
     const out = aabb2.create();
     const r = aabb2.copy(out, a);
-    assert(r === out, 'returns out');
+    assert.ok(r === out, 'returns out');
     assertAABB(out, [1, 2, 3, 4]);
 });
 
 test('set() writes explicit bounds, returns out', () => {
     const out = aabb2.create();
     const r = aabb2.set(out, 10, 20, 30, 40);
-    assert(r === out, 'returns out');
+    assert.ok(r === out, 'returns out');
     assertAABB(out, [10, 20, 30, 40]);
 });
 
@@ -216,54 +208,54 @@ test('overlapArea() containment -> inner area', () => {
 test('intersects() true for overlap', () => {
     const a = aabb2.create(0, 0, 10, 10);
     const b = aabb2.create(5, 5, 15, 15);
-    assert(aabb2.intersects(a, b));
+    assert.ok(aabb2.intersects(a, b));
 });
 
 test('intersects() true for touching edges', () => {
     const a = aabb2.create(0, 0, 10, 10);
     const b = aabb2.create(10, 0, 20, 10);
-    assert(aabb2.intersects(a, b), 'touching should count');
+    assert.ok(aabb2.intersects(a, b), 'touching should count');
 });
 
 test('intersects() false for disjoint', () => {
     const a = aabb2.create(0, 0, 10, 10);
     const b = aabb2.create(20, 20, 30, 30);
-    assert(!aabb2.intersects(a, b));
+    assert.ok(!aabb2.intersects(a, b));
 });
 
 test('intersects() false for separated on Y only', () => {
     const a = aabb2.create(0, 0, 100, 10);
     const b = aabb2.create(0, 20, 100, 30);
-    assert(!aabb2.intersects(a, b));
+    assert.ok(!aabb2.intersects(a, b));
 });
 
 test('intersects() is symmetric', () => {
     const a = aabb2.create(0, 0, 10, 10);
     const b = aabb2.create(5, 5, 15, 15);
-    assertEq(aabb2.intersects(a, b), aabb2.intersects(b, a));
+    assert.equal(aabb2.intersects(a, b), aabb2.intersects(b, a));
 });
 
 test('contains() true for inner box', () => {
     const a = aabb2.create(0, 0, 100, 100);
     const b = aabb2.create(10, 10, 20, 20);
-    assert(aabb2.contains(a, b));
+    assert.ok(aabb2.contains(a, b));
 });
 
 test('contains() true for self', () => {
     const a = aabb2.create(0, 0, 10, 10);
-    assert(aabb2.contains(a, a));
+    assert.ok(aabb2.contains(a, a));
 });
 
 test('contains() false for partial overlap', () => {
     const a = aabb2.create(0, 0, 10, 10);
     const b = aabb2.create(5, 5, 15, 15);
-    assert(!aabb2.contains(a, b));
+    assert.ok(!aabb2.contains(a, b));
 });
 
 test('contains() touching edges count as contained', () => {
     const a = aabb2.create(0, 0, 10, 10);
     const b = aabb2.create(0, 0, 10, 5);
-    assert(aabb2.contains(a, b));
+    assert.ok(aabb2.contains(a, b));
 });
 
 // =============================================================================
@@ -298,12 +290,12 @@ test('fatten() with out === a (aliasing)', () => {
 });
 
 // =============================================================================
-// ZERO-ALLOCATION GUARANTEE
+// ZERO-ALLOCATION GUARANTEE (coarse; torture.mjs is authoritative)
 // =============================================================================
 
-test('hot-loop ops do not allocate (requires --expose-gc)', () => {
+test('hot-loop ops do not allocate (requires --expose-gc)', (t) => {
     if (typeof globalThis.gc !== 'function') {
-        console.log('    \x1b[33m⚠ skipped: run with --expose-gc to enable\x1b[0m');
+        t.skip('run with --expose-gc to enable');
         return;
     }
 
@@ -338,20 +330,8 @@ test('hot-loop ops do not allocate (requires --expose-gc)', () => {
     const after = process.memoryUsage().heapUsed;
     const delta = after - before;
 
-    console.log(`    heap delta over ${N.toLocaleString()} iterations: ${(delta / 1024).toFixed(1)} KB`);
-    assert(delta < 256 * 1024, `expected < 256 KB heap growth, got ${(delta / 1024).toFixed(1)} KB`);
+    assert.ok(
+        delta < 256 * 1024,
+        `expected < 256 KB heap growth, got ${(delta / 1024).toFixed(1)} KB`
+    );
 });
-
-// =============================================================================
-// REPORT
-// =============================================================================
-
-console.log('');
-console.log('━'.repeat(60));
-if (failed === 0) {
-    console.log(`\x1b[32m${passed} passed, 0 failed\x1b[0m`);
-    process.exit(0);
-} else {
-    console.log(`\x1b[31m${passed} passed, ${failed} failed\x1b[0m`);
-    process.exit(1);
-}

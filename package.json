@@ -1,14 +1,15 @@
 {
   "name": "@zakkster/lite-aabb",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Zero-GC 2D axis-aligned bounding box primitives. Flat Float32Array(4) format [minX, minY, maxX, maxY], every op writes into a caller-provided out buffer — no per-frame allocation. ~100 lines, zero deps, ESM only.",
   "type": "module",
-  "main": "Aabb.js",
-  "module": "Aabb.js",
+  "main": "./Aabb.js",
+  "module": "./Aabb.js",
   "types": "./Aabb.d.ts",
   "exports": {
     ".": {
       "types": "./Aabb.d.ts",
+      "node": "./Aabb.js",
       "import": "./Aabb.js",
       "default": "./Aabb.js"
     }
@@ -17,11 +18,15 @@
     "Aabb.js",
     "Aabb.d.ts",
     "README.md",
+    "CHANGELOG.md",
     "llms.txt",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --expose-gc test/Aabb.test.js"
+    "test": "node --expose-gc --test test/*.test.js",
+    "test:watch": "node --test --watch test/*.test.js",
+    "torture": "node --expose-gc test/torture.mjs",
+    "verify": "npm test && npm run torture"
   },
   "keywords": [
     "aabb",
@@ -45,7 +50,11 @@
   ],
   "license": "MIT",
   "engines": {
-    "node": ">=14"
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@zakkster/lite-gc-profiler": "^1.12.0",
+    "@zakkster/lite-leak": "^1.8.0"
   },
   "author": "Zahary Shinikchiev <shinikchiev@yahoo.com>",
   "homepage": "https://github.com/PeshoVurtoleta/lite-aabb#readme",
@@ -56,6 +65,10 @@
   "bugs": {
     "url": "https://github.com/PeshoVurtoleta/lite-aabb/issues",
     "email": "shinikchiev@yahoo.com"
+  },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/PeshoVurtoleta"
   },
   "sideEffects": false
 }

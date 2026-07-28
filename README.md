@@ -1,6 +1,7 @@
 # @zakkster/lite-aabb
 
 [![npm version](https://img.shields.io/npm/v/@zakkster/lite-aabb.svg?style=for-the-badge&color=latest)](https://www.npmjs.com/package/@zakkster/lite-aabb)
+[![sponsor](https://img.shields.io/badge/sponsor-PeshoVurtoleta-ea4aaa.svg?logo=github)](https://github.com/sponsors/PeshoVurtoleta)
 ![Zero-GC](https://img.shields.io/badge/Zero--GC-Engine-00C853?style=for-the-badge&logo=leaf&logoColor=white)
 [![npm bundle size](https://img.shields.io/bundlephobia/minzip/@zakkster/lite-aabb?style=for-the-badge)](https://bundlephobia.com/result?p=@zakkster/lite-aabb)
 [![npm downloads](https://img.shields.io/npm/dm/@zakkster/lite-aabb?style=for-the-badge&color=blue)](https://www.npmjs.com/package/@zakkster/lite-aabb)
