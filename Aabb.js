@@ -14,7 +14,7 @@
  */
 
 /** Package version. Keep in sync with package.json and CHANGELOG.md (three-place sync). */
-export const VERSION = '1.2.0';
+export const VERSION = '1.3.0';
 
 /*
  * Module-private scratch for marginFloor's exact float32-ULP computation.
@@ -327,5 +327,77 @@ export const aabb2 = Object.freeze({
         _ulpF32[0] = m;      // round the magnitude to float32
         _ulpI32[0] += 1;     // bit pattern of the next float32 above m (m >= 0)
         return _ulpF32[0] - m;
+    },
+
+    // --- 2D op set (A4, see decisions/0004-2d-op-set.md) ---
+    // Point containment, box-to-box squared distance, closest point on a box.
+    // Pure, branchless, zero-alloc; they obey the touching-edge convention
+    // (A-02), the aliasing rule (A1), and the degenerate law (A2) like every op
+    // above. NEW surface only -- nothing pinned changes.
+
+    /**
+     * True if the point `(px, py)` lies inside `a`, edges and corners included
+     * (the A-02 touching convention, same as `contains`). A point is equivalent
+     * to a zero-size box here: `containsPoint(a, px, py)` agrees with
+     * `contains(a, [px, py, px, py])`.
+     *
+     * Fails closed on NaN: a NaN in the point or the box makes a comparison
+     * false, so the result is `false` -- never a spurious `true`. (Boolean
+     * predicates fail closed; the numeric ops propagate NaN as a value.)
+     * Zero allocations.
+     * @param {Float32Array} a
+     * @param {number} px
+     * @param {number} py
+     * @returns {boolean}
+     */
+    containsPoint(a, px, py) {
+        return px >= a[0] && px <= a[2] && py >= a[1] && py <= a[3];
+    },
+
+    /**
+     * Squared Euclidean distance between boxes `a` and `b`. `0` when they
+     * overlap OR touch; the true squared gap when disjoint. Symmetric.
+     *
+     * Squared, not distance -- the caller takes one `Math.sqrt` if they need the
+     * metric, and comparisons (`distanceSq(a, b) < r * r`) need no root at all.
+     * NaN propagates (A2): a NaN coordinate yields NaN, never a laundered 0.
+     * Zero allocations.
+     * @param {Float32Array} a
+     * @param {Float32Array} b
+     * @returns {number}
+     */
+    distanceSq(a, b) {
+        // Per axis: positive only when the intervals are strictly apart; 0 when
+        // they overlap or touch. Math.max(0, NaN, x) is NaN, so NaN propagates.
+        const dx = Math.max(0, a[0] - b[2], b[0] - a[2]);
+        const dy = Math.max(0, a[1] - b[3], b[1] - a[3]);
+        return dx * dx + dy * dy;
+    },
+
+    /**
+     * Closest point on box `a` to the query point `(px, py)`, written into
+     * `out2`. Inside the box the point maps to itself; outside, to the nearest
+     * edge or corner. Idempotent (the closest point of a closest point is
+     * itself).
+     *
+     * IMPORTANT: `out2` is a LENGTH-2 `Float32Array` (a Vec2 `[x, y]`), NOT a
+     * length-4 AABB. It is the only length-2 buffer in this package; passing a
+     * length-4 box here (or this result to a box op) will read/write the wrong
+     * slots without throwing. The `out2` name marks the arity at the call site.
+     *
+     * `out2` may safely alias `a` under any view relationship: `a`'s bounds are
+     * snapshotted before the first write (aliasing law, A1). Zero allocations.
+     * @param {Float32Array} out2 length 2
+     * @param {Float32Array} a
+     * @param {number} px
+     * @param {number} py
+     * @returns {Float32Array} `out2`
+     */
+    closestPoint(out2, a, px, py) {
+        // Snapshot before writing: safe when out2 is a shifted view of a.
+        const a0 = a[0], a1 = a[1], a2 = a[2], a3 = a[3];
+        out2[0] = Math.min(Math.max(px, a0), a2);
+        out2[1] = Math.min(Math.max(py, a1), a3);
+        return out2;
     }
 });

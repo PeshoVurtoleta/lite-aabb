@@ -8,6 +8,13 @@
 /** An axis-aligned bounding box: a length-4 `Float32Array` `[minX, minY, maxX, maxY]`. */
 export type AABB2 = Float32Array;
 
+/**
+ * A 2D point: a length-2 `Float32Array` `[x, y]`. Distinct from `AABB2` (length
+ * 4). Only `closestPoint`'s `out2` uses this; passing a length-4 box there, or a
+ * `Vec2` to a box op, reads/writes the wrong slots without throwing. (v1.3.0+)
+ */
+export type Vec2 = Float32Array;
+
 /** Package version. Kept in sync with package.json and CHANGELOG.md. */
 export const VERSION: string;
 
@@ -78,4 +85,29 @@ export const aabb2: {
      * (v1.2.0+)
      */
     marginFloor(a: AABB2): number;
+
+    /**
+     * True if the point `(px, py)` lies inside `a`, edges and corners included
+     * (touching counts, like `contains`). Agrees with
+     * `contains(a, [px, py, px, py])`. Fails closed on NaN (returns `false`).
+     * (v1.3.0+)
+     */
+    containsPoint(a: AABB2, px: number, py: number): boolean;
+
+    /**
+     * Squared Euclidean distance between `a` and `b`: `0` if they overlap or
+     * touch, the true squared gap if disjoint. Symmetric. Squared (take one
+     * `Math.sqrt` for the metric). NaN propagates. Zero allocations. (v1.3.0+)
+     */
+    distanceSq(a: AABB2, b: AABB2): number;
+
+    /**
+     * Closest point on box `a` to `(px, py)`, written into `out2`. Inside -> the
+     * point itself; outside -> nearest edge/corner. Idempotent.
+     *
+     * `out2` is a LENGTH-2 `Vec2` `[x, y]`, NOT a length-4 AABB -- the only
+     * length-2 buffer in this package. It may alias `a` under any view. Zero
+     * allocations. (v1.3.0+)
+     */
+    closestPoint(out2: Vec2, a: AABB2, px: number, py: number): Vec2;
 };

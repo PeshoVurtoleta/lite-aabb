@@ -548,6 +548,161 @@ test('marginFloor retains 0 bytes/call (requires --expose-gc)', (t) => {
 });
 
 // =============================================================================
+// 2D OP SET (A4: containsPoint, distanceSq, closestPoint; decisions/0004)
+// =============================================================================
+
+// Three new pure ops. Each obeys the touching-edge convention (A-02), the
+// aliasing rule (A1), and the degenerate law (A2). Nothing pinned changes.
+
+test('containsPoint: inclusive on edges and corners, false outside', () => {
+    const a = aabb2.create(0, 0, 10, 10);
+    assert.equal(aabb2.containsPoint(a, 5, 5), true, 'interior');
+    assert.equal(aabb2.containsPoint(a, 0, 0), true, 'min corner (touching)');
+    assert.equal(aabb2.containsPoint(a, 10, 10), true, 'max corner (touching)');
+    assert.equal(aabb2.containsPoint(a, 0, 5), true, 'left edge');
+    assert.equal(aabb2.containsPoint(a, 10, 5), true, 'right edge');
+    assert.equal(aabb2.containsPoint(a, -0.0001, 5), false, 'just outside left');
+    assert.equal(aabb2.containsPoint(a, 5, 10.0001), false, 'just outside top');
+    assert.equal(aabb2.containsPoint(a, 20, 20), false, 'far outside');
+});
+
+test('containsPoint agrees with contains(a, degenerate box at the point)', () => {
+    // A point is a zero-size box to the containment predicate. Pin the agreement
+    // across interior, edge, corner, and outside cases.
+    const a = aabb2.create(-3, 2, 8, 9);
+    const pt = aabb2.create();
+    for (const [px, py] of [[0, 5], [-3, 2], [8, 9], [-3, 5], [4, 9], [100, 0], [0, -100]]) {
+        aabb2.set(pt, px, py, px, py);
+        assert.equal(
+            aabb2.containsPoint(a, px, py), aabb2.contains(a, pt),
+            `disagreement at (${px}, ${py})`
+        );
+    }
+});
+
+test('containsPoint on a degenerate zero-size box: only the point itself', () => {
+    const dot = aabb2.create(5, 5, 5, 5);
+    assert.equal(aabb2.containsPoint(dot, 5, 5), true, 'the exact point');
+    assert.equal(aabb2.containsPoint(dot, 5, 5.0001), false, 'anything else is out');
+});
+
+test('containsPoint fails closed on NaN (returns false, never a spurious true)', () => {
+    const a = aabb2.create(0, 0, 10, 10);
+    assert.equal(aabb2.containsPoint(a, NaN, 5), false, 'NaN point x');
+    assert.equal(aabb2.containsPoint(a, 5, NaN), false, 'NaN point y');
+    assert.equal(aabb2.containsPoint(aabb2.set(aabb2.create(), 0, 0, NaN, 10), 5, 5), false, 'NaN box coord');
+});
+
+test('distanceSq: 0 for overlapping and for edge-touching boxes', () => {
+    const a = aabb2.create(0, 0, 10, 10);
+    assert.equal(aabb2.distanceSq(a, aabb2.create(5, 5, 15, 15)), 0, 'overlapping');
+    assert.equal(aabb2.distanceSq(a, a), 0, 'identical');
+    assert.equal(aabb2.distanceSq(a, aabb2.create(10, 0, 20, 10)), 0, 'touching on the right edge');
+    assert.equal(aabb2.distanceSq(a, aabb2.create(10, 10, 20, 20)), 0, 'touching at a corner');
+    assert.equal(aabb2.distanceSq(a, aabb2.create(3, -5, 7, 0)), 0, 'touching on the bottom edge');
+});
+
+test('distanceSq: exact squared gap for a disjoint pair, on each axis and diagonally', () => {
+    const a = aabb2.create(0, 0, 10, 10);
+    // gap of 5 on x only -> 25
+    assert.equal(aabb2.distanceSq(a, aabb2.create(15, 2, 20, 8)), 25, 'x gap 5');
+    // gap of 3 on y only -> 9
+    assert.equal(aabb2.distanceSq(a, aabb2.create(2, 13, 8, 20)), 9, 'y gap 3');
+    // corner-to-corner: dx=3 (13-10), dy=4 (14-10) -> 9 + 16 = 25
+    assert.equal(aabb2.distanceSq(a, aabb2.create(13, 14, 20, 20)), 25, 'diagonal 3-4-5');
+});
+
+test('distanceSq is symmetric', () => {
+    const pairs = [
+        [aabb2.create(0, 0, 10, 10), aabb2.create(13, 14, 20, 20)],
+        [aabb2.create(-5, -5, -1, -1), aabb2.create(4, 6, 9, 9)],
+        [aabb2.create(0, 0, 1, 1), aabb2.create(0, 0, 1, 1)],
+    ];
+    for (const [a, b] of pairs) {
+        assert.equal(aabb2.distanceSq(a, b), aabb2.distanceSq(b, a), 'not symmetric');
+    }
+});
+
+test('distanceSq propagates NaN (A2), never launders to 0', () => {
+    const a = aabb2.create(0, 0, 10, 10);
+    assert.ok(Number.isNaN(aabb2.distanceSq(a, aabb2.create(NaN, NaN, NaN, NaN))), 'NaN box -> NaN');
+    assert.ok(Number.isNaN(aabb2.distanceSq(a, aabb2.set(aabb2.create(), 20, 20, NaN, 30))), 'one NaN slot -> NaN');
+});
+
+test('closestPoint: interior point maps to itself (bit-exact), out2 is length 2', () => {
+    const a = aabb2.create(0, 0, 10, 10);
+    const out2 = new Float32Array(2);
+    const r = aabb2.closestPoint(out2, a, 4, 7);
+    assert.ok(r === out2, 'returns out2');
+    assert.equal(out2.length, 2, 'out2 is a length-2 Vec2');
+    assert.equal(out2[0], 4, 'x is the point itself');
+    assert.equal(out2[1], 7, 'y is the point itself');
+});
+
+test('closestPoint: outside point clamps to the nearest edge or corner', () => {
+    const a = aabb2.create(0, 0, 10, 10);
+    const out2 = new Float32Array(2);
+    aabb2.closestPoint(out2, a, 20, 5);
+    assert.deepEqual([...out2], [10, 5], 'right of the box -> right edge');
+    aabb2.closestPoint(out2, a, -4, 20);
+    assert.deepEqual([...out2], [0, 10], 'above-left -> top-left corner');
+    aabb2.closestPoint(out2, a, 3, -8);
+    assert.deepEqual([...out2], [3, 0], 'below -> bottom edge');
+});
+
+test('closestPoint is idempotent: closest of a closest point is itself', () => {
+    const a = aabb2.create(-2, 3, 8, 12);
+    const p = new Float32Array(2);
+    const q = new Float32Array(2);
+    for (const [px, py] of [[4, 7], [100, 100], [-50, 8], [4, -9], [8, 12]]) {
+        aabb2.closestPoint(p, a, px, py);
+        aabb2.closestPoint(q, a, p[0], p[1]);
+        assert.deepEqual([...q], [...p], `not idempotent at (${px}, ${py})`);
+    }
+});
+
+test('closestPoint propagates NaN in the box coordinate (A2)', () => {
+    const out2 = new Float32Array(2);
+    // A NaN x-bound poisons the x clamp (min(max(px, NaN), NaN) is NaN); y is clean.
+    aabb2.closestPoint(out2, aabb2.set(aabb2.create(), NaN, 0, NaN, 10), 5, 5);
+    assert.ok(Number.isNaN(out2[0]), 'NaN x-bound -> NaN x');
+    assert.equal(out2[1], 5, 'clean y is unaffected');
+});
+
+test('closestPoint is safe when out2 is a shifted view of a (A-07 aliasing)', () => {
+    // Pack a's bounds and out2 into one buffer so out2 overlaps a's storage:
+    // buf = [a0, a1, a2, a3, _, _]; a = buf[0..4], out2 = buf[2..4] (overlaps a2,a3).
+    const buf = new Float32Array(6);
+    const a = buf.subarray(0, 4);
+    aabb2.set(a, 0, 0, 10, 10);
+    const out2 = buf.subarray(2, 4); // aliases a[2], a[3]
+    aabb2.closestPoint(out2, a, 20, -5);
+    // Correct answer: clamp (20,-5) into [0,0,10,10] -> (10, 0). Snapshotting a's
+    // bounds before writing is what makes this correct despite the overlap.
+    assert.deepEqual([...out2], [10, 0], 'shifted-view out2 got the right answer');
+});
+
+test('new 2D ops retain 0 bytes/call (requires --expose-gc)', (t) => {
+    if (typeof globalThis.gc !== 'function') {
+        t.skip('run with --expose-gc to enable');
+        return;
+    }
+    const a = aabb2.create(0, 0, 10, 10);
+    const b = aabb2.create(13, 14, 20, 20);
+    const out2 = new Float32Array(2);
+    const cases = [
+        ['containsPoint', () => aabb2.containsPoint(a, 5, 5)],
+        ['distanceSq', () => aabb2.distanceSq(a, b)],
+        ['closestPoint', () => aabb2.closestPoint(out2, a, 20, -5)],
+    ];
+    for (const [name, fn] of cases) {
+        const r = measureAllocs(fn, { iterations: 100_000, warmup: 10_000, batches: 8 });
+        assert.ok(r.settled, `${name}: measurement did not settle`);
+        assert.ok(r.bytesPerCall < 1, `${name} retained ${r.bytesPerCall} bytes/call`);
+    }
+});
+
+// =============================================================================
 // ZERO-ALLOCATION GUARANTEE (coarse; torture.mjs is authoritative)
 // =============================================================================
 

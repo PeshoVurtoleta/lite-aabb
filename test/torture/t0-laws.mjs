@@ -28,6 +28,9 @@ export function run(h) {
     const s2 = new Float32Array(4);
     const s3 = new Float32Array(4);
     const s4 = new Float32Array(4);
+    const p1 = new Float32Array(2); // A4: closestPoint out2 scratch
+    const p2 = new Float32Array(2);
+    const pt = new Float32Array(4); // A4: a point as a degenerate box
 
     for (let i = 0; i < N; i++) {
         const a = corpus[i];
@@ -78,6 +81,33 @@ export function run(h) {
         const pm = aabb2.perimeter(s1);
         assertOk(TIER, pm >= aabb2.perimeter(a) - 1e-2 && pm >= aabb2.perimeter(b) - 1e-2,
             'perimeter not monotone under merge', i);
+
+        // --- 2D op set laws (A4) ---------------------------------------------
+
+        // distanceSq is symmetric (exact: swapping a,b only reorders each max).
+        assertOk(TIER, aabb2.distanceSq(a, b) === aabb2.distanceSq(b, a),
+            'distanceSq asymmetric', i);
+
+        // distanceSq is 0 exactly when the boxes intersect (touching included) --
+        // the same overlap the predicate reports.
+        assertOk(TIER, (aabb2.distanceSq(a, b) === 0) === aabb2.intersects(a, b),
+            'distanceSq==0 disagrees with intersects', i);
+
+        // closestPoint is idempotent: clamping an already-closest point is a no-op.
+        // Probe with b's min corner, an arbitrary point relative to a.
+        aabb2.closestPoint(p1, a, b[0], b[1]);
+        aabb2.closestPoint(p2, a, p1[0], p1[1]);
+        assertOk(TIER, p2[0] === p1[0] && p2[1] === p1[1], 'closestPoint not idempotent', i);
+
+        // The closest point lies inside a (edges included) and IS the point when
+        // the point is already inside.
+        assertOk(TIER, aabb2.containsPoint(a, p1[0], p1[1]), 'closestPoint left the box', i);
+
+        // containsPoint(a, px, py) === contains(a, degenerate box at the point),
+        // for the point itself and for a corner of b.
+        aabb2.set(pt, b[2], b[3], b[2], b[3]);
+        assertOk(TIER, aabb2.containsPoint(a, b[2], b[3]) === aabb2.contains(a, pt),
+            'containsPoint disagrees with contains(degenerate box)', i);
     }
 
     // fatten round-trip ABOVE the floor (small coordinates, margin 2).

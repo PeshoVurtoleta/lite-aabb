@@ -4,6 +4,43 @@ All notable changes to `@zakkster/lite-aabb` are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/); this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-07-29
+
+Rounds out the 2D op set. Three pure ops callers kept hand-rolling -- point
+containment, box-to-box squared distance, and closest point on a box -- added
+without touching a single existing body. No behaviour changes. Decision recorded
+in `decisions/0004-2d-op-set.md`.
+
+### Added
+
+- **`containsPoint(a, px, py)`** -- true if the point lies in `a`, edges and
+  corners included (the A-02 touching convention). Agrees with
+  `contains(a, [px, py, px, py])`; fails closed on NaN (returns `false`). Zero
+  allocations.
+- **`distanceSq(a, b)`** -- squared Euclidean distance between two boxes: `0`
+  when they overlap OR touch, the true squared gap when disjoint. Symmetric.
+  Squared (take one `Math.sqrt` for the metric; comparisons need none), no
+  `Math.hypot`. NaN propagates (A2). Zero allocations.
+- **`closestPoint(out2, a, px, py)`** -- the closest point on box `a` to
+  `(px, py)`: the point itself when inside, the nearest edge or corner when
+  outside; idempotent. **`out2` is a LENGTH-2 `Float32Array` (a `Vec2`), the only
+  length-2 buffer in the package** -- it is named `out2` and documented loudly to
+  keep it distinct from the length-4 AABB buffers. Snapshots `a` before writing,
+  so `out2` may alias `a` under any view (A1). Zero allocations.
+- **`Vec2`** type in `Aabb.d.ts` (`= Float32Array`) naming the length-2 `out2`
+  contract distinctly from `AABB2`.
+
+### Changed
+
+- Torture **T0** gains three metamorphic laws over the fuzz corpus:
+  `distanceSq` symmetry and its agreement with `intersects` (distance `0` iff
+  overlapping), `closestPoint` idempotence (and that its result lies in the box),
+  and `containsPoint` <-> `contains` of a degenerate box. **T1** adds the three
+  ops to the degenerate cross-product against the independent float64 oracle
+  (16 -> 19 crossed ops; coverage floor `19 * 19`). **T6** exercises all three in
+  the zero-alloc hot loop. **T9** gains a control (G) proving the `closestPoint`
+  idempotence law is falsifiable.
+
 ## [1.2.0] - 2026-07-29
 
 The precision law. Float32 has a coordinate-dependent step, so `fatten` silently
@@ -217,6 +254,7 @@ are fixed here.
 - Initial release: twelve zero-allocation 2D AABB operations on a flat
   `Float32Array(4)` `[minX, minY, maxX, maxY]`.
 
+[1.3.0]: https://github.com/PeshoVurtoleta/lite-aabb/releases/tag/v1.3.0
 [1.2.0]: https://github.com/PeshoVurtoleta/lite-aabb/releases/tag/v1.2.0
 [1.1.0]: https://github.com/PeshoVurtoleta/lite-aabb/releases/tag/v1.1.0
 [1.0.2]: https://github.com/PeshoVurtoleta/lite-aabb/releases/tag/v1.0.2

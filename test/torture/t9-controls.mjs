@@ -80,4 +80,21 @@ export function run(h) {
         const out = aabb2.fatten(new Float32Array(4), big, Math.max(0.5, brokenFloor));
         h.assertOk('control', out[0] < big[0], 'clamp with a 0 floor widened min-x (it did not)');
     }, 'assertOk accepts a marginFloor that fails to widen');
+
+    // Control G -- the A4 closestPoint idempotence law must be falsifiable. A
+    // broken "closest point" that halves the clamped x has no non-zero fixed
+    // point (10 -> 5 -> 2.5 -> ...), so it is NOT idempotent and the T0
+    // idempotence assertion must fire.
+    expectThrows(h, () => {
+        const a = aabb2.set(new Float32Array(4), 0, 0, 10, 10);
+        const brokenClosest = (out2, box, px, py) => {
+            out2[0] = Math.min(Math.max(px, box[0]), box[2]) * 0.5; // shrinks each pass
+            out2[1] = Math.min(Math.max(py, box[1]), box[3]);
+            return out2;
+        };
+        const p1 = brokenClosest(new Float32Array(2), a, 20, 5); // clamp 20->10, *0.5 = 5
+        const p2 = brokenClosest(new Float32Array(2), a, p1[0], p1[1]); // clamp 5, *0.5 = 2.5
+        h.assertOk('control', p2[0] === p1[0] && p2[1] === p1[1],
+            'broken closestPoint reported as idempotent (it is not)');
+    }, 'assertOk accepts a non-idempotent closestPoint');
 }

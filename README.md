@@ -10,7 +10,7 @@
 ![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen?style=for-the-badge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-**Zero-GC 2D axis-aligned bounding-box primitives.** Sixteen operations on a flat `Float32Array(4)` — `[minX, minY, maxX, maxY]`. Every op that returns a box writes into a caller-provided `out` buffer. No `new` in your hot loop. No object graphs. ~160 lines of code.
+**Zero-GC 2D axis-aligned bounding-box primitives.** Nineteen operations on a flat `Float32Array(4)` — `[minX, minY, maxX, maxY]`. Every op that returns a box writes into a caller-provided `out` buffer. No `new` in your hot loop. No object graphs. ~180 lines of code.
 
 ```js
 import { aabb2 } from '@zakkster/lite-aabb';
@@ -195,6 +195,7 @@ All functions are static (no `this`), live on the `aabb2` namespace, and return 
 | `aabb2.perimeter(a)` | `number` | `2 * (width + height)`. The Surface Area Heuristic cost in 2D BVHs. |
 | `aabb2.area(a)` | `number` | `width * height`. |
 | `aabb2.overlapArea(a, b)` | `number` | Area of the intersection. `0` if they don't overlap; touching edges produce `0`. Returns `NaN` if either box carries a `NaN` coordinate (v1.1.0+ — see [validity](#validity--degenerate-values)). |
+| `aabb2.distanceSq(a, b)` | `number` | Squared Euclidean distance between the boxes. `0` if they overlap **or** touch; the true squared gap when disjoint. Symmetric; take one `Math.sqrt` if you need the metric. `NaN` propagates (v1.3.0+). |
 | `aabb2.marginFloor(a)` | `number` | The smallest `fatten` margin that provably widens `a` at its coordinates — the float32 ULP of its largest-magnitude coordinate (v1.2.0+ — see [precision](#precision--the-margin-floor)). |
 
 ### Predicates
@@ -203,6 +204,7 @@ All functions are static (no `this`), live on the `aabb2` namespace, and return 
 |---|---|---|
 | `aabb2.intersects(a, b)` | `boolean` | True if `a` and `b` overlap. **Touching edges count as overlap** (`>=` comparison). |
 | `aabb2.contains(a, b)` | `boolean` | True if `a` fully contains `b`. Touching edges count as contained. |
+| `aabb2.containsPoint(a, px, py)` | `boolean` | True if the point `(px, py)` is in `a`, edges and corners included. Same as `contains(a, [px,py,px,py])`. Fails closed on `NaN` (v1.3.0+). |
 
 ### Validity & empties — zero allocation *(v1.1.0+)*
 
@@ -211,6 +213,22 @@ All functions are static (no `this`), live on the `aabb2` namespace, and return 
 | `aabb2.isValid(a)` | `boolean` | True iff all four coordinates are finite **and** `min <= max` on both axes. The boundary check — false for NaN, mixed infinities, and inverted boxes; true for zero-size boxes. |
 | `aabb2.isEmpty(a)` | `boolean` | True iff `a` is exactly the canonical empty sentinel `[Inf, Inf, -Inf, -Inf]`. |
 | `aabb2.setEmpty(out)` | `out` | Writes the canonical empty box — the correct seed for a `merge`/`extend` reduction. |
+
+### Closest point — zero allocation *(v1.3.0+)*
+
+| Function | Returns | Description |
+|---|---|---|
+| `aabb2.closestPoint(out2, a, px, py)` | `out2` | The closest point on box `a` to `(px, py)`: the point itself when inside, the nearest edge or corner when outside. Idempotent. Writes into `out2`. |
+
+> ⚠️ **`out2` is a LENGTH-2 buffer, not a length-4 AABB.** It is the only length-2 buffer in this package — a `Vec2` `[x, y]`. Allocate it as `new Float32Array(2)` (once, at setup). Passing a length-4 box here, or handing this length-2 result to a box op, will read or write the wrong slots **without throwing**. The parameter is named `out2` to flag the arity at every call site. It may safely alias `a` under any view (the bounds are snapshotted before the first write).
+
+```js
+const hit = new Float32Array(2);            // a Vec2, allocated once
+aabb2.closestPoint(hit, box, mouseX, mouseY);
+// distance from the cursor to the box, for a hover radius:
+const dx = mouseX - hit[0], dy = mouseY - hit[1];
+if (dx * dx + dy * dy <= r * r) { /* within r of the box */ }
+```
 
 ---
 
@@ -240,7 +258,7 @@ This holds because every writer (`copy`, `merge`, `extend`, `fatten`) **snapshot
 
 ## Validity & degenerate values
 
-*(v1.1.0+)* The twelve geometry ops are **total and branchless** — they never throw and never validate. That keeps the hot path fast, but it means a broken box (a `NaN`, an infinity, an inverted `min > max`) produces a nonsense number rather than an error. The rule the library follows, and the rule you apply at your own trust boundaries:
+*(v1.1.0+)* The geometry ops are **total and branchless** — they never throw and never validate. That keeps the hot path fast, but it means a broken box (a `NaN`, an infinity, an inverted `min > max`) produces a nonsense number rather than an error. The rule the library follows, and the rule you apply at your own trust boundaries:
 
 **NaN propagates — it is never laundered.** A `NaN` coordinate yields `NaN` from every numeric op, `overlapArea` included (it used to launder `NaN` to `0`; that was the incoherence fixed in v1.1.0). Every box is one of three states:
 
@@ -353,6 +371,7 @@ The `node:test` unit suite covers:
 | **Aliasing & contract** | frozen namespace, touching-edge triad, f32 boundary, shifted-view (A-07) |
 | **Degenerate-value law** | `isValid`/`isEmpty`/`setEmpty` tri-state, empty as merge identity, NaN propagation, inverted-box detection |
 | **Precision / margin floor** | exact `marginFloor` ULP values, the A-01 evaporation boundary, the clamp idiom, fail-closed edges |
+| **2D op set** | `containsPoint` edges/agreement-with-`contains`, `distanceSq` touching/disjoint/symmetry, `closestPoint` clamp/idempotence/`out2` aliasing, degenerate-law compliance |
 | **Zero-allocation guarantee** | mixed ops → heap growth budget under `--expose-gc`, plus per-op `measureAllocs` |
 
 The zero-alloc tests require the `--expose-gc` flag — without it they skip (rather than fail), so CI runs without flags still go green. `npm test` sets the flag for you.

@@ -163,6 +163,15 @@ export function run() {
             else if (g !== e) fail(TIER, label + '[' + i + ']: got ' + g + ' expected ' + e, {});
         }
     }
+    // NaN-aware per-slot Vec2 pin (A4: closestPoint's length-2 out2).
+    function eqVec2(label, got, exp) {
+        checks++;
+        for (let i = 0; i < 2; i++) {
+            const g = got[i], e = exp[i];
+            if (e !== e) { if (g === g) fail(TIER, label + '[' + i + ']: got ' + g + ' expected NaN', {}); }
+            else if (g !== e) fail(TIER, label + '[' + i + ']: got ' + g + ' expected ' + e, {});
+        }
+    }
 
     // Independent float64 oracles over a snapshot (never call aabb2).
     const oArea = (a) => (a[2] - a[0]) * (a[3] - a[1]);
@@ -191,6 +200,14 @@ export function run() {
         oDV.setInt32(0, oDV.getInt32(0) + 1);
         return oDV.getFloat32(0) - m;
     };
+    // 2D op set oracles (A4): squared distance, point containment, closest point.
+    const oDistSq = (a, b) => {
+        const dx = Math.max(0, a[0] - b[2], b[0] - a[2]);
+        const dy = Math.max(0, a[1] - b[3], b[1] - a[3]);
+        return dx * dx + dy * dy;
+    };
+    const oContainsPoint = (a, px, py) => px >= a[0] && px <= a[2] && py >= a[1] && py <= a[3];
+    const oClosest = (a, px, py) => [Math.min(Math.max(px, a[0]), a[2]), Math.min(Math.max(py, a[1]), a[3])];
 
     // The section-3 degenerate corpus: zeros/signed-zero, both infinities, the
     // empty sentinel, NaN (all four and one slot), subnormals, f32 max, the
@@ -221,6 +238,8 @@ export function run() {
     ];
 
     const acc = new Float32Array(4);
+    const acc2 = new Float32Array(2);       // A4: closestPoint's length-2 out2
+    const PX = 3, PY = 4;                    // a fixed finite probe point
     for (let i = 0; i < CASES.length; i++) {
         const name = CASES[i][0];
         const bx = CASES[i][1];
@@ -253,10 +272,16 @@ export function run() {
         eqBool('contains(' + name + ',good)', aabb2.contains(bx, REF), oContains(a, G));
         eqNum('overlapArea(good,' + name + ')', aabb2.overlapArea(REF, bx), oOverlap(G, a));
         eqNum('overlapArea(' + name + ',self)', aabb2.overlapArea(bx, bx), oOverlap(a, a));
+
+        // 2D op set (A4): distance to the valid partner, point containment, and
+        // closest point -- each against the independent oracle over the snapshot.
+        eqNum('distanceSq(good,' + name + ')', aabb2.distanceSq(REF, bx), oDistSq(G, a));
+        eqBool('containsPoint(' + name + ',pt)', aabb2.containsPoint(bx, PX, PY), oContainsPoint(a, PX, PY));
+        eqVec2('closestPoint(' + name + ',pt)', aabb2.closestPoint(acc2, bx, PX, PY), oClosest(a, PX, PY));
     }
 
-    // Coverage floor: 19 cases x 16 crossed ops. Locks the matrix so a later
+    // Coverage floor: 19 cases x 19 crossed ops. Locks the matrix so a later
     // edit that drops a row or a case trips the gate instead of silently
     // shrinking coverage.
-    if (checks < 19 * 16) fail(TIER, 'cross-product under-covered: only ' + checks + ' checks ran', {});
+    if (checks < 19 * 19) fail(TIER, 'cross-product under-covered: only ' + checks + ' checks ran', {});
 }
