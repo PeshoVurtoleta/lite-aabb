@@ -5,14 +5,15 @@
  * zero per-iteration allocation: every result is written into pre-allocated
  * scratch and compared in place.
  *
- * The fatten round-trip law carries the A-01 assertion in BOTH directions:
- * above the ULP floor a positive margin round-trips exactly; below it (large
- * coordinates, tiny margin) fatten provably does NOT widen the box. A0 pins
- * that as current behaviour; A3 owns the fix.
+ * The fatten round-trip law carries the A-01 assertion in BOTH directions,
+ * keyed on marginFloor (A3): a margin >= marginFloor(a) provably widens every
+ * side and round-trips; a margin below it provably does NOT widen the
+ * max-magnitude side. fatten itself is unchanged -- the floor is what makes the
+ * boundary detectable.
  */
 
 import { aabb2 } from '../../Aabb.js';
-import { allocBoxes, fillValidCorpus, xorshift32, assertBoxEq, assertOk, fail } from './harness.mjs';
+import { allocBoxes, fillValidCorpus, xorshift32, assertBoxEq, assertOk } from './harness.mjs';
 
 const TIER = 'T0';
 const N = 4096; // corpus size
@@ -85,12 +86,30 @@ export function run(h) {
     aabb2.fatten(s2, s2, -2);
     assertBoxEq(TIER, s2, small, 1e-4, -1);
 
-    // A-01 as a law: BELOW the floor, fatten provably does not widen. At 1e7 the
-    // f32 ULP is 1.0, so margin 0.5 rounds away on the min sides.
-    const big = aabb2.set(s3, 1e7, 1e7, 1e7 + 1, 1e7 + 1);
-    aabb2.fatten(s4, big, 0.5);
-    if (s4[0] !== big[0] || s4[1] !== big[1]) {
-        fail(TIER, 'A-01 regressed: fatten widened below the ULP floor -- expected min sides unchanged '
-            + '(this pin belongs to A3, not A0)', { op: -1 });
+    // A-01 as a passing law (A3), over a range of scales. marginFloor is the
+    // detector: AT/ABOVE the floor every side widens; just BELOW it the
+    // max-magnitude side provably does not.
+    const A01_SCALES = [1, 1e3, 1e6, 1e7, 16777216];
+    for (let k = 0; k < A01_SCALES.length; k++) {
+        const s = A01_SCALES[k];
+        const box = aabb2.set(s3, s, s, s + 1, s + 1);
+        const floor = aabb2.marginFloor(box);
+
+        // At the floor: all four sides strictly widen.
+        aabb2.fatten(s4, box, floor);
+        assertOk(TIER, s4[0] < box[0] && s4[1] < box[1] && s4[2] > box[2] && s4[3] > box[3],
+            'marginFloor did not widen all sides at scale ' + s, k);
+
+        // The clamp idiom (what callers use) always widens.
+        aabb2.fatten(s4, box, Math.max(0.1, floor));
+        assertOk(TIER, s4[2] > box[2] && s4[3] > box[3],
+            'clamp(max(0.1,floor)) did not widen max side at scale ' + s, k);
+
+        // Just below the floor: the max-magnitude side provably does NOT widen.
+        const justBelow = Math.fround(floor * 0.49);
+        aabb2.fatten(s4, box, justBelow);
+        assertOk(TIER, s4[2] === box[2] && s4[3] === box[3],
+            'A-01: sub-floor margin widened the max side at scale ' + s
+            + ' -- marginFloor over-reports', k);
     }
 }

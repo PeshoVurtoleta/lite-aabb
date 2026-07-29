@@ -4,6 +4,45 @@ All notable changes to `@zakkster/lite-aabb` are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/); this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-07-29
+
+The precision law. Float32 has a coordinate-dependent step, so `fatten` silently
+stops widening once the margin drops below it (A-01). This release makes that
+limit **detectable** without touching the hot path. No behaviour changes.
+Decision recorded in `decisions/0003-precision.md`.
+
+### Added
+
+- **`marginFloor(a)`** -- the smallest margin that provably widens `a` on all
+  four sides at its coordinates: the float32 ULP (gap to the next representable
+  value) of the largest-magnitude coordinate. Clamp with it:
+  `fatten(out, a, Math.max(margin, marginFloor(a)))`. Returns `NaN` for a NaN
+  coordinate and `Infinity` for an infinite one (fail closed); a zero box yields
+  the smallest subnormal. Zero allocations. This is the precision analogue of
+  `isValid` -- a boundary predicate, not a guard inside a hot op.
+
+### Fixed (at the API layer -- hot bodies unchanged)
+
+- **A-01** (S1) -- margin evaporation is now **detectable**. `fatten`'s
+  arithmetic is deliberately **unchanged** (a margin below the ULP still rounds
+  away -- that is a property of float32, and adding a branch or a `nextafter`
+  bump to the hottest function was rejected to keep it byte-for-byte identical
+  and non-breaking). `marginFloor` reports the true step so callers and
+  `@zakkster/lite-bvh` can clamp fat-bounds margins and stop the fast path from
+  silently dying at world scale. `git diff` proves all fifteen prior bodies are
+  unchanged. Measured evaporation table (coordinate scale x margin -> widened)
+  is in the decision record.
+
+### Changed
+
+- Torture **T0**'s fatten round-trip law is upgraded from a pinned bug to a
+  passing law keyed on `marginFloor` (at/above the floor every side widens;
+  just below it the max-magnitude side provably does not, across five scales).
+  **T1**'s A-01 pin flips from "nothing detects the evaporation" to
+  "`marginFloor` detects it, and the clamp fixes it", and adds `marginFloor` to
+  the degenerate cross-product (16 ops x 19 cases) against an independent
+  DataView oracle. **T9** gains a control proving the floor gate is falsifiable.
+
 ## [1.1.0] - 2026-07-29
 
 The degenerate-value law. One coherent answer to "what does a broken box mean",
@@ -62,8 +101,8 @@ plus the tools to apply it. The one behaviour change is a **bug fix**:
 
 ### Still known (fixed in later releases)
 
-- **A-01** (S1, A3) -- margin evaporation below half a float32 ULP. Unchanged
-  here; pinned in torture T1.
+- **A-01** (S1, A3) -- margin evaporation below a float32 ULP. Unchanged here;
+  pinned in torture T1. **Addressed in 1.2.0** via `marginFloor`.
 
 ## [1.0.2] - 2026-07-28
 
@@ -178,6 +217,7 @@ are fixed here.
 - Initial release: twelve zero-allocation 2D AABB operations on a flat
   `Float32Array(4)` `[minX, minY, maxX, maxY]`.
 
+[1.2.0]: https://github.com/PeshoVurtoleta/lite-aabb/releases/tag/v1.2.0
 [1.1.0]: https://github.com/PeshoVurtoleta/lite-aabb/releases/tag/v1.1.0
 [1.0.2]: https://github.com/PeshoVurtoleta/lite-aabb/releases/tag/v1.0.2
 [1.0.1]: https://github.com/PeshoVurtoleta/lite-aabb/releases/tag/v1.0.1

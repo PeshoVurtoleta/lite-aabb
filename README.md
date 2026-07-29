@@ -5,11 +5,12 @@
 ![Zero-GC](https://img.shields.io/badge/Zero--GC-Engine-00C853?style=for-the-badge&logo=leaf&logoColor=white)
 [![npm bundle size](https://img.shields.io/bundlephobia/minzip/@zakkster/lite-aabb?style=for-the-badge)](https://bundlephobia.com/result?p=@zakkster/lite-aabb)
 [![npm downloads](https://img.shields.io/npm/dm/@zakkster/lite-aabb?style=for-the-badge&color=blue)](https://www.npmjs.com/package/@zakkster/lite-aabb)
+[![npm total downloads](https://img.shields.io/npm/dt/@zakkster/lite-aabb?style=for-the-badge&color=blue)](https://www.npmjs.com/package/@zakkster/lite-aabb)
 ![TypeScript](https://img.shields.io/badge/TypeScript-Types-informational?style=for-the-badge)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen?style=for-the-badge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-**Zero-GC 2D axis-aligned bounding-box primitives.** Fifteen operations on a flat `Float32Array(4)` — `[minX, minY, maxX, maxY]`. Every op that returns a box writes into a caller-provided `out` buffer. No `new` in your hot loop. No object graphs. ~150 lines of code.
+**Zero-GC 2D axis-aligned bounding-box primitives.** Sixteen operations on a flat `Float32Array(4)` — `[minX, minY, maxX, maxY]`. Every op that returns a box writes into a caller-provided `out` buffer. No `new` in your hot loop. No object graphs. ~160 lines of code.
 
 ```js
 import { aabb2 } from '@zakkster/lite-aabb';
@@ -37,6 +38,7 @@ if (aabb2.intersects(swept, wall)) {
 - [API reference](#api-reference)
 - [Aliasing rules](#aliasing-rules)
 - [Validity & degenerate values](#validity--degenerate-values)
+- [Precision & the margin floor](#precision--the-margin-floor)
 - [Compatibility with `@zakkster/lite-bvh`](#compatibility-with-zaksterlite-bvh)
 - [Testing](#testing)
 - [License](#license)
@@ -156,7 +158,7 @@ This format is chosen on purpose:
 
 ### `Float32` is not free
 
-The trade-off: `Float32Array` has ~7 decimal digits of precision. For world-space bounds at typical game-engine scales (a few thousand units), this is fine. If your scene spans millions of units (planetary terrain, geographic mapping), use `Float64Array` and pay the doubled memory cost — but you'll need to swap the type yourself in `Aabb.js`.
+The trade-off: `Float32Array` has ~7 decimal digits of precision. For world-space bounds at typical game-engine scales (a few thousand units), this is fine. Past ~1e7 it stops being a free trade-off and starts eating your `fatten` margins — see [Precision & the margin floor](#precision--the-margin-floor), and use `marginFloor` to detect it. If your scene spans millions of units (planetary terrain, geographic mapping) and you need the range, note that every op except `create`/`clone` is element-type-agnostic — pass your own `Float64Array(4)` as the `out` buffer and pay the doubled memory cost. The floor still exists there, just out near ~1e15.
 
 ---
 
@@ -193,6 +195,7 @@ All functions are static (no `this`), live on the `aabb2` namespace, and return 
 | `aabb2.perimeter(a)` | `number` | `2 * (width + height)`. The Surface Area Heuristic cost in 2D BVHs. |
 | `aabb2.area(a)` | `number` | `width * height`. |
 | `aabb2.overlapArea(a, b)` | `number` | Area of the intersection. `0` if they don't overlap; touching edges produce `0`. Returns `NaN` if either box carries a `NaN` coordinate (v1.1.0+ — see [validity](#validity--degenerate-values)). |
+| `aabb2.marginFloor(a)` | `number` | The smallest `fatten` margin that provably widens `a` at its coordinates — the float32 ULP of its largest-magnitude coordinate (v1.2.0+ — see [precision](#precision--the-margin-floor)). |
 
 ### Predicates
 
@@ -268,6 +271,36 @@ The full law and the (zero) measured hot-path cost are in `decisions/0002-degene
 
 ---
 
+## Precision & the margin floor
+
+*(v1.2.0+)* `Float32` stores values with a coordinate-dependent step (its ULP). Once a `fatten` margin drops below that step, it rounds away and the box **does not widen** — silently, because `contains` still returns `true`:
+
+```js
+const a = aabb2.create(1e7, 1e7, 1e7 + 1, 1e7 + 1);
+aabb2.fatten(a, a, 0.5);   // at 1e7 the ULP is 1.0, so 0.5 vanishes
+// a is UNCHANGED — and aabb2.contains(a, a) is still true. Nothing warns you.
+```
+
+This bites hardest downstream: a BVH's fat bounds equal its tight bounds, and every motion update takes the slow path forever. `fatten` is deliberately **left alone** — it never branches or bumps its result, so it stays byte-for-byte the fast function it always was, and no existing behaviour changes. Instead the library gives you the *detector*, and you clamp:
+
+```js
+const floor = aabb2.marginFloor(a);                        // 1.0 at coordinate 1e7
+aabb2.fatten(out, a, Math.max(desiredMargin, floor));      // guaranteed to widen
+```
+
+`marginFloor(a)` returns the smallest margin that provably widens `a` on **all four sides** — the ULP of the largest-magnitude coordinate (the upper ULP, since the growing max sides need the coarser of the two steps). It's the same shape as `isValid`: a boundary check you opt into, never a cost inside the hot op. It fails closed — a `NaN` coordinate yields `NaN`, an infinite one yields `Infinity`.
+
+| coordinate scale | ULP (`marginFloor`) | a margin of 0.5 … |
+|---|---|---|
+| ~1e3 | 6.1e-5 | widens |
+| ~1e6 | 0.0625 | widens |
+| **~1e7** | **1.0** | **evaporates** |
+| **~2²⁴** | **2.0** | **evaporates** |
+
+Need a larger honest range? Every op except `create`/`clone` is element-type-agnostic — pass your own `Float64Array(4)` as `out` and the floor moves out to ~1e15 (it never disappears; that's the nature of finite floats). The decision, the measured evaporation table, and the proof that all fifteen prior hot bodies are unchanged are in `decisions/0003-precision.md` in the [source repository](https://github.com/PeshoVurtoleta/lite-aabb).
+
+---
+
 ## Compatibility with `@zakkster/lite-bvh`
 
 [`@zakkster/lite-bvh`](https://www.npmjs.com/package/@zakkster/lite-bvh) uses the **same `Float32Array(4)` AABB format** as the leaf input to `insertLeaf` / `updateLeaf` / `query`:
@@ -319,11 +352,12 @@ The `node:test` unit suite covers:
 | `fatten` | positive/zero/negative margins, aliasing |
 | **Aliasing & contract** | frozen namespace, touching-edge triad, f32 boundary, shifted-view (A-07) |
 | **Degenerate-value law** | `isValid`/`isEmpty`/`setEmpty` tri-state, empty as merge identity, NaN propagation, inverted-box detection |
+| **Precision / margin floor** | exact `marginFloor` ULP values, the A-01 evaporation boundary, the clamp idiom, fail-closed edges |
 | **Zero-allocation guarantee** | mixed ops → heap growth budget under `--expose-gc`, plus per-op `measureAllocs` |
 
 The zero-alloc tests require the `--expose-gc` flag — without it they skip (rather than fail), so CI runs without flags still go green. `npm test` sets the flag for you.
 
-The authoritative zero-GC proof is the **torture gate** (`test/torture.mjs`): metamorphic laws, the complete degenerate-value matrix, the aliasing matrix, a `maxMajor: 0` GC budget, a soak, and controls that prove every gate can fail. It prints exactly `ok` and exits `0` on pass; `TORTURE_CONTROL=alloc` makes it exit non-zero on demand.
+The authoritative zero-GC proof is the **torture gate** (`test/torture.mjs`): metamorphic laws (including the margin-floor law), the complete degenerate-value matrix, the aliasing matrix, a `maxMajor: 0` GC budget, a soak, and controls that prove every gate can fail. It prints exactly `ok` and exits `0` on pass; `TORTURE_CONTROL=alloc` makes it exit non-zero on demand.
 
 ---
 

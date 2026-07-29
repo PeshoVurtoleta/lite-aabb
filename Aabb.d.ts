@@ -68,4 +68,14 @@ export const aabb2: {
 
     /** Writes the canonical empty box `[Inf, Inf, -Inf, -Inf]` into `out`; the seed for a merge/extend reduction. (v1.1.0+) */
     setEmpty(out: AABB2): AABB2;
+
+    /**
+     * The smallest margin that provably widens `a` on all four sides at its
+     * coordinates: the float32 ULP of the largest-magnitude coordinate. A
+     * smaller margin rounds away silently (finding A-01). Clamp with it:
+     * `fatten(out, a, Math.max(margin, marginFloor(a)))`. Returns `NaN` for a
+     * NaN coordinate and `Infinity` for an infinite one. Zero allocations.
+     * (v1.2.0+)
+     */
+    marginFloor(a: AABB2): number;
 };

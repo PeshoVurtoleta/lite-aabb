@@ -117,11 +117,23 @@ export function run() {
     assertEq(TIER, o[2], 16777216, 'f32 integer boundary: 16777217 reads back as 16777216 (A-10)');
 
     // --- margin evaporation (A-01) -------------------------------------------
+    // fatten's arithmetic is UNCHANGED: below the f32 ULP the margin still
+    // rounds away (at 1e7 the ULP is 1.0, so 0.5 vanishes). What A3 adds is that
+    // marginFloor DETECTS the doomed margin and the clamp fixes it.
     const big = aabb2.set(new Float32Array(4), 1e7, 1e7, 1e7 + 1, 1e7 + 1);
     aabb2.fatten(o, big, 0.5);
-    assertEq(TIER, o[0], 1e7, 'fatten margin evaporated on min-x at 1e7 (A-01)');
-    assertEq(TIER, o[1], 1e7, 'fatten margin evaporated on min-y at 1e7 (A-01)');
-    assertOk(TIER, aabb2.contains(o, big) === true, 'nothing detects the evaporation (A-01)');
+    assertEq(TIER, o[0], 1e7, 'fatten margin still evaporates on min-x at 1e7 (A-01, unchanged)');
+    assertEq(TIER, o[1], 1e7, 'fatten margin still evaporates on min-y at 1e7 (A-01, unchanged)');
+    // The detector (A3): marginFloor reports the true step, and 0.5 is below it.
+    assertEq(TIER, aabb2.marginFloor(big), 1, 'marginFloor detects the 1e7 ULP (A-01)');
+    assertOk(TIER, 0.5 < aabb2.marginFloor(big), 'marginFloor flags the doomed 0.5 margin (A-01)');
+    // The clamp idiom widens where the raw margin could not.
+    aabb2.fatten(o, big, Math.max(0.5, aabb2.marginFloor(big)));
+    assertOk(TIER, o[0] < big[0] && o[1] < big[1] && o[2] > big[2] && o[3] > big[3],
+        'clamp(max(0.5,marginFloor)) widens all sides at 1e7 (A-01 fixed at the door)');
+    // At 2^24 the max side needs the UPPER ulp (2.0); marginFloor returns it.
+    const huge = aabb2.set(new Float32Array(4), 16777216, 16777216, 16777216, 16777216);
+    assertEq(TIER, aabb2.marginFloor(huge), 2, 'marginFloor returns the upper ULP (2) at 2^24 (A-01)');
 
     // =====================================================================
     // Layer 2 -- complete cross-product (every op x every degenerate value)
@@ -167,6 +179,18 @@ export function run() {
         if (wx > 0 && wy > 0) return wx * wy;
         return (wx !== wx || wy !== wy) ? NaN : 0;
     };
+    // marginFloor oracle: upper f32 ULP of the largest-magnitude coordinate,
+    // re-derived independently via DataView bit manipulation (a different code
+    // path than the module's Int32Array-aliased scratch).
+    const oDV = new DataView(new ArrayBuffer(4));
+    const oFloor = (a) => {
+        const m = Math.max(Math.abs(a[0]), Math.abs(a[1]), Math.abs(a[2]), Math.abs(a[3]));
+        if (m !== m) return NaN;
+        if (m === Infinity) return Infinity;
+        oDV.setFloat32(0, m);
+        oDV.setInt32(0, oDV.getInt32(0) + 1);
+        return oDV.getFloat32(0) - m;
+    };
 
     // The section-3 degenerate corpus: zeros/signed-zero, both infinities, the
     // empty sentinel, NaN (all four and one slot), subnormals, f32 max, the
@@ -207,6 +231,7 @@ export function run() {
         eqNum('perimeter(' + name + ')', aabb2.perimeter(bx), oPerim(a));
         eqBool('isValid(' + name + ')', aabb2.isValid(bx), oValid(a));
         eqBool('isEmpty(' + name + ')', aabb2.isEmpty(bx), oEmpty(a));
+        eqNum('marginFloor(' + name + ')', aabb2.marginFloor(bx), oFloor(a));
 
         // writers over a degenerate input (distinct out; aliasing is T2's job)
         eqBox('copy(' + name + ')', aabb2.copy(acc, bx), [F(a[0]), F(a[1]), F(a[2]), F(a[3])]);
@@ -230,8 +255,8 @@ export function run() {
         eqNum('overlapArea(' + name + ',self)', aabb2.overlapArea(bx, bx), oOverlap(a, a));
     }
 
-    // Coverage floor: 19 cases x 15 crossed ops. Locks the matrix so a later
+    // Coverage floor: 19 cases x 16 crossed ops. Locks the matrix so a later
     // edit that drops a row or a case trips the gate instead of silently
     // shrinking coverage.
-    if (checks < 19 * 15) fail(TIER, 'cross-product under-covered: only ' + checks + ' checks ran', {});
+    if (checks < 19 * 16) fail(TIER, 'cross-product under-covered: only ' + checks + ' checks ran', {});
 }

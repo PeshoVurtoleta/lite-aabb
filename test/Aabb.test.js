@@ -485,6 +485,69 @@ test('new predicates/setEmpty retain 0 bytes/call (requires --expose-gc)', (t) =
 });
 
 // =============================================================================
+// PRECISION / MARGIN FLOOR (A-01, A3)
+// =============================================================================
+
+test('marginFloor returns the exact f32 ULP of the largest-magnitude coordinate', () => {
+    assert.equal(aabb2.marginFloor(aabb2.create(0, 0, 2, 2)), 2 ** -22, 'ulp at 2');
+    assert.equal(aabb2.marginFloor(aabb2.create(0, 0, 1000, 1000)), 2 ** -14, 'ulp at 1000');
+    assert.equal(aabb2.marginFloor(aabb2.create(1e6, 1e6, 1e6, 1e6)), 0.0625, 'ulp at 1e6');
+    const at1e7 = aabb2.set(aabb2.create(), 1e7, 1e7, 1e7 + 1, 1e7 + 1);
+    assert.equal(aabb2.marginFloor(at1e7), 1, 'ulp at 1e7 is 1.0 -- the A-01 coordinate');
+    const at2p24 = aabb2.set(aabb2.create(), 16777216, 16777216, 16777216, 16777216);
+    assert.equal(aabb2.marginFloor(at2p24), 2, 'upper ulp at 2^24 is 2.0 (the max side needs it)');
+});
+
+test('the A-01 evaporation boundary: fatten widens iff margin >= marginFloor', () => {
+    // The named boundary. For each margin the bvh README recommends, at every
+    // scale, `fatten` widens all four sides EXACTLY when the margin reaches the
+    // floor -- so marginFloor is the precise detector of the silent no-op.
+    const widensAll = (b, m) => {
+        const o = aabb2.fatten(aabb2.create(), b, m);
+        return o[0] < b[0] && o[1] < b[1] && o[2] > b[2] && o[3] > b[3];
+    };
+    const scales = [1, 1e3, 1e6, 1e7, 16777216];
+    for (const M of [0.1, 0.5, 1, 4]) {
+        for (const s of scales) {
+            const b = aabb2.set(aabb2.create(), s, s, s + 1, s + 1);
+            const floor = aabb2.marginFloor(b);
+            assert.equal(
+                widensAll(b, M), M >= floor,
+                `scale ${s}, margin ${M}: widen=${widensAll(b, M)} but floor=${floor}`
+            );
+        }
+    }
+});
+
+test('the clamp idiom fatten(a, max(m, marginFloor(a))) always strictly widens', () => {
+    for (const s of [1, 1e3, 1e6, 1e7, 16777216, 3.4e38 / 4]) {
+        const b = aabb2.set(aabb2.create(), s, s, s + 1, s + 1);
+        const out = aabb2.fatten(aabb2.create(), b, Math.max(0.1, aabb2.marginFloor(b)));
+        assert.ok(out[0] < b[0] && out[1] < b[1] && out[2] > b[2] && out[3] > b[3],
+            `clamp failed to widen at scale ${s}`);
+        assert.equal(aabb2.contains(out, b), true, 'the widened box contains the original');
+    }
+});
+
+test('marginFloor fails closed on degenerate input', () => {
+    assert.equal(aabb2.marginFloor(aabb2.create(0, 0, 0, 0)), 2 ** -149, 'zero box -> smallest subnormal');
+    assert.ok(Number.isNaN(aabb2.marginFloor(aabb2.set(aabb2.create(), 0, 0, NaN, 5))), 'NaN coord -> NaN');
+    assert.equal(aabb2.marginFloor(aabb2.set(aabb2.create(), 0, 0, Infinity, 5)), Infinity, 'Inf coord -> Infinity');
+    assert.ok(Number.isFinite(aabb2.marginFloor(aabb2.create(3.4e38, 0, 3.4e38, 0))), 'f32max stays finite');
+});
+
+test('marginFloor retains 0 bytes/call (requires --expose-gc)', (t) => {
+    if (typeof globalThis.gc !== 'function') {
+        t.skip('run with --expose-gc to enable');
+        return;
+    }
+    const a = aabb2.create(1e7, 1e7, 1e7 + 1, 1e7 + 1);
+    const r = measureAllocs(() => aabb2.marginFloor(a), { iterations: 100_000, warmup: 10_000, batches: 8 });
+    assert.ok(r.settled, 'measurement did not settle');
+    assert.ok(r.bytesPerCall < 1, `marginFloor retained ${r.bytesPerCall} bytes/call`);
+});
+
+// =============================================================================
 // ZERO-ALLOCATION GUARANTEE (coarse; torture.mjs is authoritative)
 // =============================================================================
 

@@ -14,7 +14,18 @@
  */
 
 /** Package version. Keep in sync with package.json and CHANGELOG.md (three-place sync). */
-export const VERSION = '1.1.0';
+export const VERSION = '1.2.0';
+
+/*
+ * Module-private scratch for marginFloor's exact float32-ULP computation.
+ * Allocated ONCE at import, never in a hot path, never resized. Reading a
+ * value's next representable float32 via its bit pattern is exact across the
+ * whole normal range -- unlike Math.log2, which rounds at powers of two.
+ * This is module-local state with no externally observable effect, so it does
+ * not violate `sideEffects: false`.
+ */
+const _ulpF32 = new Float32Array(1);
+const _ulpI32 = new Int32Array(_ulpF32.buffer);
 
 /**
  * Aliasing contract (see decisions/0001-aliasing.md):
@@ -41,6 +52,18 @@ export const VERSION = '1.1.0';
  *   boundaries with `isValid`; recognize / build the empty box with `isEmpty` /
  *   `setEmpty`. Validation is never bolted into a hot op (the one carve-out is
  *   `overlapArea`, which stops laundering NaN -- measured cost in the record).
+ *
+ * Precision law (see decisions/0003-precision.md):
+ *
+ *   Float32 has a coordinate-dependent step (ULP). Once the requested `fatten`
+ *   margin drops below that step, it rounds away and the box does not widen --
+ *   silently, since `contains` still returns true (A-01). This is a property of
+ *   f32, not a bug in `fatten`, so `fatten` is UNCHANGED: it never gains a
+ *   branch and never bumps the result. Instead `marginFloor(a)` reports the
+ *   smallest margin that provably widens the box at its coordinates, and the
+ *   caller clamps: `fatten(out, a, Math.max(margin, marginFloor(a)))`. Same
+ *   boundary-predicate shape as `isValid` -- detection lives at the door, the
+ *   hot body stays branchless.
  */
 export const aabb2 = Object.freeze({
     /**
@@ -275,5 +298,34 @@ export const aabb2 = Object.freeze({
         out[2] = -Infinity;
         out[3] = -Infinity;
         return out;
+    },
+
+    /**
+     * The smallest margin that PROVABLY widens `a` on all four sides at its
+     * coordinates: the float32 ULP (gap to the next representable value) of the
+     * largest-magnitude coordinate. Any `margin >= marginFloor(a)` is guaranteed
+     * to move every side; a smaller margin may round away (finding A-01). Use it
+     * to clamp: `fatten(out, a, Math.max(margin, marginFloor(a)))`.
+     *
+     * The upper ULP is returned deliberately -- it is the coarser of the two
+     * steps around the coordinate, so it widens both the subtracted min sides
+     * and the added max sides (e.g. at 2^24 the min side moves by 1.0 but the
+     * max side needs 2.0). Defined on any box: it reads magnitudes, not order.
+     *
+     * Fail closed on non-finite input: a NaN coordinate yields NaN; an infinite
+     * coordinate yields Infinity (no finite margin widens an infinite box). A
+     * zero box yields the smallest subnormal, the true minimal step near zero.
+     * Zero allocations (the ULP scratch is allocated once at module load).
+     * @param {Float32Array} a
+     * @returns {number}
+     */
+    marginFloor(a) {
+        const m = Math.max(Math.abs(a[0]), Math.abs(a[1]),
+                           Math.abs(a[2]), Math.abs(a[3]));
+        // m is Infinity or NaN here iff a coordinate was non-finite.
+        if (!(m < Infinity)) return m === m ? Infinity : NaN;
+        _ulpF32[0] = m;      // round the magnitude to float32
+        _ulpI32[0] += 1;     // bit pattern of the next float32 above m (m >= 0)
+        return _ulpF32[0] - m;
     }
 });

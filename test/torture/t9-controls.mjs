@@ -70,4 +70,14 @@ export function run(h) {
         tracker.track({}, function () {}, 0); // tracked, never untracked.
         if (tracker.size() !== 0) throw new Error('leak detected (expected)');
     }, 'tracker.size() blind to a leak');
+
+    // Control F -- the A3 precision-floor gate must be falsifiable. If
+    // marginFloor under-reported (returned 0), clamping with it would NOT widen
+    // the box at 1e7, so the T0/T1 "widens all sides" assertion must fire.
+    expectThrows(h, () => {
+        const brokenFloor = 0; // a marginFloor that fails to detect the ULP
+        const big = aabb2.set(new Float32Array(4), 1e7, 1e7, 1e7 + 1, 1e7 + 1);
+        const out = aabb2.fatten(new Float32Array(4), big, Math.max(0.5, brokenFloor));
+        h.assertOk('control', out[0] < big[0], 'clamp with a 0 floor widened min-x (it did not)');
+    }, 'assertOk accepts a marginFloor that fails to widen');
 }
