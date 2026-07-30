@@ -186,8 +186,65 @@ export function run(h) {
         vMerge('merge: packed 4N neighbour', packed.subarray(8, 12), packed.subarray(4, 8), packed.subarray(0, 4));
     }
 
-    // Coverage floor: locks the current matrix (44 cases -- both overlap
-    // directions at offsets 1-3) so a later edit that drops a row trips the
-    // gate instead of silently shrinking coverage.
-    if (checks < 44) h.fail(TIER, 'matrix under-covered: only ' + checks + ' cases ran', {});
+    // --- packed 4*N batch-op aliasing (X1, decisions/0005 D4) -----------------
+    // mergeAll and intersectsAny inherit the "alias anything" rule; fattenAll
+    // supports in-place and disjoint outputs only (a shifted outPacked is
+    // out-of-contract -- see FORMAT.md -- so it is deliberately NOT asserted).
+    {
+        const T = [[2, 2, 4, 4], [-3, 0, 1, 9], [5, -5, 7, 0]];
+        const packBoxes = (t) => {
+            const p = new Float32Array(4 * t.length);
+            for (let i = 0; i < t.length; i++) {
+                p[4 * i] = t[i][0]; p[4 * i + 1] = t[i][1];
+                p[4 * i + 2] = t[i][2]; p[4 * i + 3] = t[i][3];
+            }
+            return p;
+        };
+        // The full union oracle (computed independently of any aliasing).
+        let mnX = Infinity, mnY = Infinity, mxX = -Infinity, mxY = -Infinity;
+        for (let i = 0; i < T.length; i++) {
+            if (T[i][0] < mnX) mnX = T[i][0];
+            if (T[i][1] < mnY) mnY = T[i][1];
+            if (T[i][2] > mxX) mxX = T[i][2];
+            if (T[i][3] > mxY) mxY = T[i][3];
+        }
+
+        // mergeAll: out4 aliases box 0 of inPacked. Correct only because all
+        // reads precede the single terminal write.
+        {
+            const packed = packBoxes(T);
+            const out = packed.subarray(0, 4);
+            aabb2.mergeAll(out, packed, T.length);
+            report('mergeAll: out4 aliases box 0', out, [mnX, mnY, mxX, mxY]);
+        }
+
+        // fattenAll in place (outPacked === inPacked): each box widened by m.
+        {
+            const m = 2;
+            const packed = packBoxes(T);
+            aabb2.fattenAll(packed, packed, m, T.length);
+            for (let i = 0; i < T.length; i++) {
+                report('fattenAll: in place box ' + i, packed.subarray(4 * i, 4 * i + 4),
+                    [T[i][0] - m, T[i][1] - m, T[i][2] + m, T[i][3] + m]);
+            }
+        }
+
+        // fattenAll into a disjoint buffer (input left intact).
+        {
+            const m = 1;
+            const inP = packBoxes(T);
+            const outP = new Float32Array(4 * T.length);
+            aabb2.fattenAll(outP, inP, m, T.length);
+            for (let i = 0; i < T.length; i++) {
+                report('fattenAll: disjoint box ' + i, outP.subarray(4 * i, 4 * i + 4),
+                    [T[i][0] - m, T[i][1] - m, T[i][2] + m, T[i][3] + m]);
+            }
+        }
+    }
+
+    // Coverage floor: locks the current matrix (44 single-box cases -- both
+    // overlap directions at offsets 1-3 -- plus 7 packed batch-op rows) so a
+    // later edit that drops a row trips the gate instead of silently shrinking
+    // coverage.
+    if (checks < 51) h.fail(TIER, 'matrix under-covered: only ' + checks + ' cases ran', {});
 }

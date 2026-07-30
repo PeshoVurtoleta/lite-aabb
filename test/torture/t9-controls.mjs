@@ -97,4 +97,31 @@ export function run(h) {
         h.assertOk('control', p2[0] === p1[0] && p2[1] === p1[1],
             'broken closestPoint reported as idempotent (it is not)');
     }, 'assertOk accepts a non-idempotent closestPoint');
+
+    // Control H -- the X1 batch fold-equality law must be falsifiable. A broken
+    // mergeAll that drops the LAST box (folds only count-1 boxes) yields a union
+    // that misses part of the input, so the T0 "mergeAll === merge fold"
+    // assertion must fire.
+    expectThrows(h, () => {
+        const packed = new Float32Array(8);
+        aabb2.set(packed.subarray(0, 4), 0, 0, 4, 4);
+        aabb2.set(packed.subarray(4, 8), 10, 10, 20, 20);
+        const brokenMergeAll = (out4, inPacked, count) => {
+            let mnX = Infinity, mnY = Infinity, mxX = -Infinity, mxY = -Infinity;
+            for (let i = 0; i < count - 1; i++) { // BUG: drops the last box
+                const j = i << 2;
+                mnX = Math.min(mnX, inPacked[j]); mnY = Math.min(mnY, inPacked[j + 1]);
+                mxX = Math.max(mxX, inPacked[j + 2]); mxY = Math.max(mxY, inPacked[j + 3]);
+            }
+            out4[0] = mnX; out4[1] = mnY; out4[2] = mxX; out4[3] = mxY;
+            return out4;
+        };
+        // True union is [0,0,20,20]; the broken op returns [0,0,4,4].
+        const got = brokenMergeAll(new Float32Array(4), packed, 2);
+        const ref = aabb2.setEmpty(new Float32Array(4));
+        aabb2.merge(ref, ref, aabb2.set(new Float32Array(4), 0, 0, 4, 4));
+        aabb2.merge(ref, ref, aabb2.set(new Float32Array(4), 10, 10, 20, 20));
+        h.assertOk('control', got[0] === ref[0] && got[1] === ref[1] && got[2] === ref[2] && got[3] === ref[3],
+            'broken mergeAll reported as equal to the merge fold (it drops a box)');
+    }, 'assertOk accepts a mergeAll that drops a box');
 }

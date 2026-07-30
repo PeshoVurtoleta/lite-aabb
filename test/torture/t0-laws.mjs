@@ -31,6 +31,11 @@ export function run(h) {
     const p1 = new Float32Array(2); // A4: closestPoint out2 scratch
     const p2 = new Float32Array(2);
     const pt = new Float32Array(4); // A4: a point as a degenerate box
+    // X1: packed 3-box scratch for the batch fold-equality laws.
+    const packed3 = new Float32Array(12);
+    const outPacked3 = new Float32Array(12);
+    const fref = new Float32Array(4);
+    const mref = new Float32Array(4);
 
     for (let i = 0; i < N; i++) {
         const a = corpus[i];
@@ -108,7 +113,47 @@ export function run(h) {
         aabb2.set(pt, b[2], b[3], b[2], b[3]);
         assertOk(TIER, aabb2.containsPoint(a, b[2], b[3]) === aabb2.contains(a, pt),
             'containsPoint disagrees with contains(degenerate box)', i);
+
+        // --- packed batch ops (X1): each equals its single-box fold -----------
+        // Pack a, b, c into a 3-box buffer (no allocation -- reused scratch).
+        for (let k = 0; k < 4; k++) { packed3[k] = a[k]; packed3[4 + k] = b[k]; packed3[8 + k] = c[k]; }
+
+        // fattenAll box j === single fatten of that box, bit-for-bit. Compare
+        // slot by slot at the box offset -- no per-iteration subarray allocation
+        // (this tier promises zero allocation in the loop).
+        aabb2.fattenAll(outPacked3, packed3, 1.5, 3);
+        aabb2.fatten(fref, a, 1.5);
+        assertOk(TIER, outPacked3[0] === fref[0] && outPacked3[1] === fref[1] &&
+            outPacked3[2] === fref[2] && outPacked3[3] === fref[3], 'fattenAll box 0 != fatten', i);
+        aabb2.fatten(fref, b, 1.5);
+        assertOk(TIER, outPacked3[4] === fref[0] && outPacked3[5] === fref[1] &&
+            outPacked3[6] === fref[2] && outPacked3[7] === fref[3], 'fattenAll box 1 != fatten', i);
+        aabb2.fatten(fref, c, 1.5);
+        assertOk(TIER, outPacked3[8] === fref[0] && outPacked3[9] === fref[1] &&
+            outPacked3[10] === fref[2] && outPacked3[11] === fref[3], 'fattenAll box 2 != fatten', i);
+
+        // mergeAll === left fold of merge seeded with setEmpty, bit-for-bit.
+        aabb2.setEmpty(mref);
+        aabb2.merge(mref, mref, a);
+        aabb2.merge(mref, mref, b);
+        aabb2.merge(mref, mref, c);
+        aabb2.mergeAll(s2, packed3, 3);
+        assertBoxEq(TIER, s2, mref, 0, i);
+
+        // intersectsAny === the first index of a hand scan of intersects.
+        let expect = -1;
+        if (aabb2.intersects(a, b)) expect = 0;
+        else if (aabb2.intersects(b, b)) expect = 1; // b intersects itself -> always 1 if reached
+        else if (aabb2.intersects(c, b)) expect = 2;
+        assertOk(TIER, aabb2.intersectsAny(packed3, b, 3) === expect,
+            'intersectsAny disagrees with the first-hit intersects scan', i);
     }
+
+    // Batch count === 0 identities (checked once).
+    aabb2.mergeAll(s1, corpus[0], 0);
+    assertOk(TIER, aabb2.isEmpty(s1), 'mergeAll(count=0) is not the empty sentinel', -1);
+    assertOk(TIER, aabb2.intersectsAny(corpus[0], corpus[1], 0) === -1,
+        'intersectsAny(count=0) is not -1', -1);
 
     // fatten round-trip ABOVE the floor (small coordinates, margin 2).
     const small = aabb2.set(s1, -3, -3, 5, 5);

@@ -284,4 +284,71 @@ export function run() {
     // edit that drops a row or a case trips the gate instead of silently
     // shrinking coverage.
     if (checks < 19 * 19) fail(TIER, 'cross-product under-covered: only ' + checks + ' checks ran', {});
+
+    // =====================================================================
+    // Packed batch ops (X1) -- degenerate values, pinned by hand
+    // =====================================================================
+    // The single-box cross-product above does not fit the packed shape, so the
+    // batch ops get their own degenerate pins with an independent floor. The key
+    // properties: mergeAll folds like merge (NaN propagates, not skipped);
+    // fattenAll propagates NaN in the box or the margin; intersectsAny fails
+    // closed like intersects; count === 0 is defined.
+    let pchecks = 0;
+    const pin = (cond, label) => { pchecks++; if (!cond) fail(TIER, label, {}); };
+
+    const pk = (t) => {
+        const p = new Float32Array(4 * t.length);
+        for (let i = 0; i < t.length; i++) {
+            p[4 * i] = t[i][0]; p[4 * i + 1] = t[i][1]; p[4 * i + 2] = t[i][2]; p[4 * i + 3] = t[i][3];
+        }
+        return p;
+    };
+    const acc4 = new Float32Array(4);
+
+    // mergeAll propagates NaN (a NaN box poisons the union, like a merge fold).
+    aabb2.mergeAll(acc4, pk([[0, 0, 10, 10], [NaN, NaN, NaN, NaN]]), 2);
+    pin(Number.isNaN(acc4[0]) && Number.isNaN(acc4[1]) && Number.isNaN(acc4[2]) && Number.isNaN(acc4[3]),
+        'mergeAll does not propagate a NaN box (it must fold like merge, not skip)');
+
+    // mergeAll count === 0 -> the empty sentinel (union of zero boxes).
+    aabb2.mergeAll(acc4, pk([[0, 0, 10, 10]]), 0);
+    pin(acc4[0] === Infinity && acc4[1] === Infinity && acc4[2] === -Infinity && acc4[3] === -Infinity,
+        'mergeAll(count=0) is not the empty sentinel');
+
+    // mergeAll over a single inverted box returns that box unchanged (min/max of
+    // one element), matching the arithmetic -- inverted stays inverted.
+    aabb2.mergeAll(acc4, pk([[5, 5, 0, 0]]), 1);
+    pin(acc4[0] === 5 && acc4[1] === 5 && acc4[2] === 0 && acc4[3] === 0,
+        'mergeAll of one inverted box changed it');
+
+    // fattenAll propagates a NaN box coordinate.
+    aabb2.fattenAll(acc4, pk([[NaN, 0, 10, 10]]), 1, 1);
+    pin(Number.isNaN(acc4[0]), 'fattenAll did not propagate a NaN box coordinate');
+
+    // fattenAll propagates a NaN margin across the whole box.
+    aabb2.fattenAll(acc4, pk([[0, 0, 10, 10]]), NaN, 1);
+    pin(Number.isNaN(acc4[0]) && Number.isNaN(acc4[2]), 'fattenAll did not propagate a NaN margin');
+
+    // fattenAll count === 0 writes nothing.
+    acc4[0] = 42; acc4[1] = 42; acc4[2] = 42; acc4[3] = 42;
+    aabb2.fattenAll(acc4, pk([[0, 0, 10, 10]]), 5, 0);
+    pin(acc4[0] === 42 && acc4[3] === 42, 'fattenAll(count=0) wrote to the output');
+
+    // intersectsAny fails closed on a NaN box (comparisons against NaN are false).
+    pin(aabb2.intersectsAny(pk([[NaN, NaN, NaN, NaN]]), REF, 1) === -1,
+        'intersectsAny matched a NaN box (must fail closed like intersects)');
+
+    // intersectsAny on an inverted box agrees with the single-box intersects.
+    {
+        const invBox = box(5, 5, 0, 0);
+        const expect = oIntersects(snap(invBox), G) ? 0 : -1;
+        pin(aabb2.intersectsAny(pk([[5, 5, 0, 0]]), REF, 1) === expect,
+            'intersectsAny(inverted) disagrees with intersects');
+    }
+
+    // f32 integer boundary survives a packed round-trip (mergeAll of one box).
+    aabb2.mergeAll(acc4, pk([[0, 0, 16777217, 1]]), 1);
+    pin(acc4[2] === 16777216, 'packed f32 integer boundary did not round to 16777216');
+
+    if (pchecks < 9) fail(TIER, 'packed degenerate sub-matrix under-covered: only ' + pchecks + ' checks ran', {});
 }

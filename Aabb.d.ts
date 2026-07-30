@@ -15,8 +15,22 @@ export type AABB2 = Float32Array;
  */
 export type Vec2 = Float32Array;
 
+/**
+ * A packed buffer of N boxes: a `Float32Array` of `4*N` floats, box `i` at slots
+ * `4i..4i+3`. The input/output shape of the batch ops. (v2.0.0+)
+ */
+export type Packed = Float32Array;
+
 /** Package version. Kept in sync with package.json and CHANGELOG.md. */
 export const VERSION: string;
+
+/**
+ * Version of the shared FORMAT contract (see FORMAT.md), NOT the package
+ * version. `@zakkster/lite-bvh` exports the identical value; compare for
+ * equality to detect a format skew. Integer, on a separate axis from `VERSION`.
+ * (v2.0.0+)
+ */
+export const FORMAT_VERSION: number;
 
 export const aabb2: {
     /** Allocates. Call once at setup. */
@@ -110,4 +124,27 @@ export const aabb2: {
      * allocations. (v1.3.0+)
      */
     closestPoint(out2: Vec2, a: AABB2, px: number, py: number): Vec2;
+
+    /**
+     * Fattens each of `count` boxes in `inPacked` by `margin` into `outPacked`,
+     * box for box (mirrors `fatten`; no auto-clamp). Returns `outPacked`.
+     * `outPacked === inPacked` (in place) and a disjoint `outPacked` are safe; a
+     * shifted/overlapping view of `inPacked` is NOT supported. Zero allocations.
+     * (v2.0.0+)
+     */
+    fattenAll(outPacked: Packed, inPacked: Packed, margin: number, count: number): Packed;
+
+    /**
+     * Unions `count` boxes from `inPacked` into `out4`. Returns `out4`.
+     * `count === 0` yields the empty sentinel `[Inf, Inf, -Inf, -Inf]`. `out4`
+     * may alias anywhere in `inPacked`. Zero allocations. (v2.0.0+)
+     */
+    mergeAll(out4: AABB2, inPacked: Packed, count: number): AABB2;
+
+    /**
+     * The lowest index in `[0, count)` whose box in `inPacked` intersects `b`
+     * (touching counts), or `-1` if none do. `count === 0` returns `-1`.
+     * Read-only. Zero allocations. (v2.0.0+)
+     */
+    intersectsAny(inPacked: Packed, b: AABB2, count: number): number;
 };

@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { measureAllocs } from '@zakkster/lite-gc-profiler';
-import { aabb2, VERSION } from '../Aabb.js';
+import { aabb2, VERSION, FORMAT_VERSION } from '../Aabb.js';
 
 // Near-equality helpers. Float32 round-trips lose precision, so exact === on
 // stored coordinates is wrong; compare within an epsilon instead.
@@ -34,9 +34,15 @@ function assertAABB(box, [minX, minY, maxX, maxY], msg = 'aabb mismatch') {
 // PACKAGE SURFACE
 // =============================================================================
 
-test('VERSION is exported and is a 1.x semver', () => {
+test('VERSION is exported and is a semver string', () => {
     assert.equal(typeof VERSION, 'string');
-    assert.match(VERSION, /^1\.\d+\.\d+$/);
+    assert.match(VERSION, /^\d+\.\d+\.\d+$/);
+});
+
+test('FORMAT_VERSION is exported as an integer contract id (v2.0.0+)', () => {
+    assert.equal(typeof FORMAT_VERSION, 'number');
+    assert.ok(Number.isInteger(FORMAT_VERSION), 'FORMAT_VERSION is an integer');
+    assert.equal(FORMAT_VERSION, 1, 'the current format contract version');
 });
 
 // =============================================================================
@@ -747,4 +753,140 @@ test('hot-loop ops do not allocate (requires --expose-gc)', (t) => {
         delta < 256 * 1024,
         `expected < 256 KB heap growth, got ${(delta / 1024).toFixed(1)} KB`
     );
+});
+
+// =============================================================================
+// PACKED 4*N BATCH OPS (X1; decisions/0005)
+// =============================================================================
+
+// A packed buffer of N boxes, box i at slots 4i..4i+3. The batch ops mirror the
+// single-box ops box for box; these tests pin that equivalence, the count===0
+// identities, and the packed aliasing contract (D4).
+
+// Build a packed Float32Array from an array of [minX,minY,maxX,maxY] tuples.
+function packBoxes(tuples) {
+    const p = new Float32Array(4 * tuples.length);
+    for (let i = 0; i < tuples.length; i++) {
+        p[4 * i] = tuples[i][0];
+        p[4 * i + 1] = tuples[i][1];
+        p[4 * i + 2] = tuples[i][2];
+        p[4 * i + 3] = tuples[i][3];
+    }
+    return p;
+}
+
+test('fattenAll: each box matches the single-box fatten, box for box', () => {
+    const tuples = [[0, 0, 10, 10], [-5, -5, -1, -1], [3, 3, 3, 3], [100, 200, 150, 260]];
+    const inPacked = packBoxes(tuples);
+    const out = new Float32Array(inPacked.length);
+    const margin = 1.5;
+    assert.equal(aabb2.fattenAll(out, inPacked, margin, tuples.length), out, 'returns outPacked');
+    const ref = aabb2.create();
+    for (let i = 0; i < tuples.length; i++) {
+        aabb2.fatten(ref, aabb2.create(...tuples[i]), margin);
+        assertAABB(out.subarray(4 * i, 4 * i + 4), [...ref], `box ${i}`);
+    }
+});
+
+test('fattenAll: in-place (outPacked === inPacked) is safe', () => {
+    const tuples = [[0, 0, 10, 10], [20, 20, 30, 30], [-4, -4, 4, 4]];
+    const packed = packBoxes(tuples);
+    aabb2.fattenAll(packed, packed, 2, tuples.length);
+    for (let i = 0; i < tuples.length; i++) {
+        const [x0, y0, x1, y1] = tuples[i];
+        assertAABB(packed.subarray(4 * i, 4 * i + 4), [x0 - 2, y0 - 2, x1 + 2, y1 + 2], `box ${i} in place`);
+    }
+});
+
+test('fattenAll: count === 0 writes nothing', () => {
+    const inPacked = packBoxes([[0, 0, 10, 10]]);
+    const out = new Float32Array(4).fill(42);
+    aabb2.fattenAll(out, inPacked, 5, 0);
+    assert.deepEqual([...out], [42, 42, 42, 42], 'untouched');
+});
+
+test('mergeAll: unions N boxes into one, matching a merge fold', () => {
+    const tuples = [[0, 0, 4, 4], [-3, 2, 1, 9], [5, -5, 7, 0], [-10, -1, -8, 8]];
+    const inPacked = packBoxes(tuples);
+    const out = aabb2.create();
+    assert.equal(aabb2.mergeAll(out, inPacked, tuples.length), out, 'returns out4');
+    // Independent fold with the single-box merge from setEmpty.
+    const ref = aabb2.setEmpty(aabb2.create());
+    for (let i = 0; i < tuples.length; i++) aabb2.merge(ref, ref, aabb2.create(...tuples[i]));
+    assertAABB(out, [...ref], 'mergeAll disagrees with the merge fold');
+    // Sanity: the union encloses every input box.
+    for (let i = 0; i < tuples.length; i++) {
+        assert.ok(aabb2.contains(out, aabb2.create(...tuples[i])), `union misses box ${i}`);
+    }
+});
+
+test('mergeAll: count === 0 yields the empty sentinel (union of zero boxes)', () => {
+    const inPacked = packBoxes([[0, 0, 10, 10]]);
+    const out = aabb2.create(1, 2, 3, 4);
+    aabb2.mergeAll(out, inPacked, 0);
+    assert.equal(aabb2.isEmpty(out), true, 'count 0 -> canonical empty box');
+    // And it is the identity: merging a real box into it recovers that box.
+    aabb2.merge(out, out, aabb2.create(5, 6, 7, 8));
+    assertAABB(out, [5, 6, 7, 8], 'empty is the merge identity');
+});
+
+test('mergeAll: out4 may alias inside inPacked (writes only after all reads)', () => {
+    const tuples = [[2, 2, 4, 4], [-3, 0, 1, 9], [5, -5, 7, 0]];
+    const packed = packBoxes(tuples);
+    const out = packed.subarray(0, 4); // aliases box 0
+    aabb2.mergeAll(out, packed, tuples.length);
+    // Full union of all three: minX -3, minY -5, maxX 7, maxY 9.
+    assertAABB(out, [-3, -5, 7, 9], 'aliased mergeAll got the wrong union');
+});
+
+test('intersectsAny: returns the first intersecting index, else -1', () => {
+    const tuples = [[0, 0, 2, 2], [10, 10, 12, 12], [5, 5, 9, 9], [4, 4, 6, 6]];
+    const inPacked = packBoxes(tuples);
+    // Probe overlapping boxes 2 and 3 -> first hit is index 2.
+    assert.equal(aabb2.intersectsAny(inPacked, aabb2.create(5.5, 5.5, 8, 8), tuples.length), 2, 'first of several');
+    // A probe hitting nothing.
+    assert.equal(aabb2.intersectsAny(inPacked, aabb2.create(100, 100, 101, 101), tuples.length), -1, 'no hit -> -1');
+    // Touching counts (A-02): share the edge x=2 with box 0.
+    assert.equal(aabb2.intersectsAny(inPacked, aabb2.create(2, 0, 3, 2), tuples.length), 0, 'touching edge counts');
+});
+
+test('intersectsAny: count === 0 returns -1, and matches a scan of intersects', () => {
+    const tuples = [[0, 0, 2, 2], [5, 5, 9, 9]];
+    const inPacked = packBoxes(tuples);
+    assert.equal(aabb2.intersectsAny(inPacked, aabb2.create(0, 0, 1, 1), 0), -1, 'count 0 -> -1');
+    // Equivalence to a hand scan over the same probe.
+    const b = aabb2.create(6, 6, 7, 7);
+    let expect = -1;
+    for (let i = 0; i < tuples.length; i++) {
+        if (aabb2.intersects(aabb2.create(...tuples[i]), b)) { expect = i; break; }
+    }
+    assert.equal(aabb2.intersectsAny(inPacked, b, tuples.length), expect, 'disagrees with intersects scan');
+});
+
+test('batch ops retain 0 bytes/call (requires --expose-gc)', (t) => {
+    if (typeof globalThis.gc !== 'function') {
+        t.skip('run with --expose-gc to enable');
+        return;
+    }
+    const n = 64;
+    const inPacked = new Float32Array(4 * n);
+    for (let i = 0; i < n; i++) {
+        inPacked[4 * i] = i;
+        inPacked[4 * i + 1] = i;
+        inPacked[4 * i + 2] = i + 5;
+        inPacked[4 * i + 3] = i + 5;
+    }
+    const outPacked = new Float32Array(4 * n);
+    const out4 = aabb2.create();
+    const probe = aabb2.create(10, 10, 15, 15);
+    const cases = [
+        ['fattenAll', () => aabb2.fattenAll(outPacked, inPacked, 1, n)],
+        ['mergeAll', () => aabb2.mergeAll(out4, inPacked, n)],
+        ['intersectsAny', () => aabb2.intersectsAny(inPacked, probe, n)],
+    ];
+    for (const [name, fn] of cases) {
+        const r = measureAllocs(fn, { iterations: 20_000, warmup: 5_000, batches: 8 });
+        assert.ok(r.settled, `${name}: measurement did not settle`);
+        assert.ok(r.bytesPerCall < 1, `${name} retained ${r.bytesPerCall} bytes/call`);
+    }
 });

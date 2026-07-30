@@ -1,14 +1,18 @@
 # @zakkster/lite-aabb
 
-> Zero-GC 2D axis-aligned bounding-box primitives. Nineteen operations on a flat `Float32Array(4)` `[minX, minY, maxX, maxY]`. Every op that returns a box writes into a caller-provided `out` buffer. ~180 lines, zero deps, ESM only.
+> Zero-GC 2D axis-aligned bounding-box primitives. Twenty-two operations on a flat `Float32Array(4)` `[minX, minY, maxX, maxY]`, including packed `4*N` batch ops. Every op that returns a box writes into a caller-provided `out` buffer. ~230 lines, zero deps, ESM only.
 
 ## Format
 
 An AABB is a `Float32Array` of length 4. Indices: `0=minX`, `1=minY`, `2=maxX`, `3=maxY`. No class wrapper; module-level functions only.
 
+## Format contract
+
+The `Float32Array(4)` layout is a versioned, cross-package contract shared with `@zakkster/lite-bvh`, documented in `FORMAT.md` and advertised by `FORMAT_VERSION` (integer, `1`). Both packages export the same `FORMAT_VERSION` and compare it for equality to detect a format skew; it is on a separate axis from the semver `VERSION`.
+
 ## API
 
-Single named export: `aabb2`.
+Named exports: `aabb2`, `VERSION`, `FORMAT_VERSION`.
 
 ```ts
 aabb2.create(minX?, minY?, maxX?, maxY?): Float32Array  // ALLOCATES — setup only
@@ -30,7 +34,12 @@ aabb2.marginFloor(a): number                            // smallest margin that 
 aabb2.containsPoint(a, px, py): boolean                  // point in box, edges included; false on NaN (v1.3.0+)
 aabb2.distanceSq(a, b): number                           // squared distance; 0 if overlapping/touching; NaN propagates (v1.3.0+)
 aabb2.closestPoint(out2, a, px, py): out2                // closest point on a to (px,py); out2 is LENGTH-2 (Vec2) (v1.3.0+)
+aabb2.fattenAll(outPacked, inPacked, margin, count): outPacked  // fatten N packed boxes; in-place or disjoint only (v2.0.0+)
+aabb2.mergeAll(out4, inPacked, count): out4              // union of N packed boxes; count 0 -> empty sentinel (v2.0.0+)
+aabb2.intersectsAny(inPacked, b, count): index | -1      // first packed box intersecting b (touching counts), else -1 (v2.0.0+)
 ```
+
+`Packed` is a `Float32Array` of `4*N` floats, box `i` at slots `4i..4i+3`. The batch ops walk it by index -- no per-box `subarray`, zero allocation. `count` bounds every loop (0/negative/NaN -> zero boxes); the caller owns buffer length (`inPacked.length >= 4*count`), and an out-of-range read yields NaN, which propagates.
 
 `Vec2` is a length-2 `Float32Array` `[x, y]`. `closestPoint`'s `out2` is the only length-2 buffer here; every other buffer is a length-4 AABB. Passing a length-4 box as `out2` (or a `Vec2` to a box op) reads/writes the wrong slots and does not throw -- the `out2` name flags the arity at the call site.
 
@@ -38,7 +47,7 @@ aabb2.closestPoint(out2, a, px, py): out2                // closest point on a t
 
 - `create` and `clone` allocate — call only at initialization.
 - Every other function takes an `out` parameter and writes into it. None allocate.
-- `out` may alias any input under any view relationship — identical view, a shifted/overlapping `subarray` of one buffer, or a distinct buffer. The writers snapshot inputs before writing (v1.0.2+; ≤1.0.1 corrupted shifted views — finding A-07).
+- `out` may alias any input under any view relationship — identical view, a shifted/overlapping `subarray` of one buffer, or a distinct buffer. The writers snapshot inputs before writing (v1.0.2+; ≤1.0.1 corrupted shifted views — finding A-07). This "alias anything" rule holds for the single-box writers and for `mergeAll`/`intersectsAny`; it does NOT extend to `fattenAll`, whose element-wise write forbids a shifted/overlapping `outPacked` (in-place `outPacked === inPacked` or a disjoint buffer only — see `FORMAT.md`).
 - The `aabb2` namespace is frozen (`Object.isFrozen(aabb2) === true`); its ops are a contract, not a mutable bag.
 - All predicate boundaries are inclusive (touching counts as overlap / contained), EXCEPT `overlapArea`, which returns `0` for a touching (zero-width) intersection — a touching pair shares zero area. This three-way split is deliberate. `containsPoint` follows the inclusive rule (edges/corners count); `distanceSq` is `0` for overlapping AND touching boxes.
 - Precision law (v1.2.0+): float32 has a coordinate-dependent step (ULP), so `fatten` silently fails to widen once the margin drops below it (finding A-01: `fatten(o, [1e7,1e7,1e7+1,1e7+1], 0.5)` is a no-op, and `contains` still says true). `fatten` is UNCHANGED -- it never branches or bumps. Instead `marginFloor(a)` reports the smallest margin that provably widens the box (the upper ULP of the largest-magnitude coordinate), and the caller clamps: `fatten(out, a, Math.max(margin, marginFloor(a)))`. Same door-not-hot-op shape as `isValid`. `marginFloor` fails closed: NaN coord -> NaN, infinite coord -> Infinity. Need a larger honest range? Pass your own `Float64Array` out-buffer to the out-param ops (the floor still exists, near ~1e15).

@@ -4,6 +4,66 @@ All notable changes to `@zakkster/lite-aabb` are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/); this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.0.0] - 2026-07-30
+
+The FORMAT contract + packed batch ops -- the lite-aabb half of the twin 2.0.0
+(the lite-bvh half follows in X1-B). Decision recorded in
+`decisions/0005-format-and-batch.md`.
+
+**No v1 behaviour changed.** All nineteen single-box operations are byte-for-byte
+identical to 1.3.0; the full v1 test suite passes unchanged. The major bump is a
+**contract** commitment, not an API break -- see Breaking below.
+
+### Breaking
+
+- **The `Float32Array(4)` `[minX, minY, maxX, maxY]` layout is now a versioned,
+  cross-package FORMAT contract** (`FORMAT.md`), advertised by a new
+  `FORMAT_VERSION` export and shared byte-for-byte with `@zakkster/lite-bvh`.
+  Both packages bump to 2.0.0 together so they advertise the same contract
+  version at the same semver. This is a versioned promise about the buffer
+  layout, aliasing, touching-edge, precision and packed-stride rules -- **not** a
+  change to any v1 function signature or behaviour. A pure-v1 consumer upgrading
+  1.3.0 -> 2.0.0 sees no behavioural difference.
+
+### Added
+
+- **`FORMAT_VERSION`** (`= 1`) -- top-level export naming the shared format
+  contract version. An integer compared for equality, on a separate axis from
+  `VERSION`; `@zakkster/lite-bvh` exports the identical value.
+- **`FORMAT.md`** -- the contract document (element type, layout, index meaning,
+  the A-02 touching triad, the A1 aliasing rule, the packed `4*N` stride/bounds
+  rules, the A3 margin floor, `FORMAT_VERSION`). Added to the published
+  `files[]`.
+- **`fattenAll(outPacked, inPacked, margin, count)`** -- fattens each of `count`
+  boxes in a packed `4*N` buffer by `margin`, box for box. Mirrors `fatten`
+  exactly (no auto-clamp). In-place (`outPacked === inPacked`) and disjoint
+  outputs are safe; a shifted/overlapping output view is unsupported (D4). Zero
+  allocations.
+- **`mergeAll(out4, inPacked, count)`** -- unions `count` packed boxes into one.
+  Seeded with the empty sentinel, so `count === 0` yields
+  `[Inf, Inf, -Inf, -Inf]` (`isEmpty` true) -- the correct union of zero boxes.
+  `out4` may alias anywhere in `inPacked`. Zero allocations.
+- **`intersectsAny(inPacked, b, count)`** -- the lowest index whose packed box
+  intersects `b` (touching counts, A-02), or `-1`. `count === 0` returns `-1`.
+  Read-only. Zero allocations.
+- **`Packed`** type in `Aabb.d.ts` (`= Float32Array`) naming the `4*N` batch
+  buffer distinctly from `AABB2` and `Vec2`.
+
+### Changed
+
+- Torture **T0** gains the batch fold-equality laws over the fuzz corpus:
+  `mergeAll` equals a left-fold of `merge` seeded with `setEmpty`; `fattenAll`
+  box `i` equals the single `fatten` of box `i`; `intersectsAny` equals a
+  first-hit `intersects` scan; and the `count === 0` identities (`mergeAll` ->
+  empty, `intersectsAny` -> `-1`). **T1** adds a packed degenerate sub-matrix
+  (NaN, inverted, `count = 0`, f32 boundary) against the independent oracle.
+  **T2** adds the packed aliasing rows of D4 (`mergeAll` out4-aliases-inPacked;
+  `fattenAll` in-place and disjoint; the shifted `fattenAll` row named as
+  out-of-contract). **T6** exercises all three ops in the zero-alloc hot loop
+  (ten -> thirteen). **T8** (still stubbing the bvh round-trip) now asserts the
+  aabb-side layout constants and `FORMAT_VERSION`. **T9** gains a control proving
+  a batch law is falsifiable.
+
 ## [1.3.0] - 2026-07-29
 
 Rounds out the 2D op set. Three pure ops callers kept hand-rolling -- point
@@ -254,6 +314,7 @@ are fixed here.
 - Initial release: twelve zero-allocation 2D AABB operations on a flat
   `Float32Array(4)` `[minX, minY, maxX, maxY]`.
 
+[2.0.0]: https://github.com/PeshoVurtoleta/lite-aabb/releases/tag/v2.0.0
 [1.3.0]: https://github.com/PeshoVurtoleta/lite-aabb/releases/tag/v1.3.0
 [1.2.0]: https://github.com/PeshoVurtoleta/lite-aabb/releases/tag/v1.2.0
 [1.1.0]: https://github.com/PeshoVurtoleta/lite-aabb/releases/tag/v1.1.0

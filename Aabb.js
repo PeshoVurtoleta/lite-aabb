@@ -14,7 +14,16 @@
  */
 
 /** Package version. Keep in sync with package.json and CHANGELOG.md (three-place sync). */
-export const VERSION = '1.3.0';
+export const VERSION = '2.0.0';
+
+/**
+ * The version of the shared FORMAT contract (see FORMAT.md), NOT the package
+ * version. `@zakkster/lite-bvh` exports the identical constant; the two packages
+ * compare it for equality to detect a format skew. It is an integer compared for
+ * equality, on a separate axis from `VERSION` -- do not sync it to semver.
+ * Bumps only when the buffer layout itself changes (decisions/0005). (v2.0.0+)
+ */
+export const FORMAT_VERSION = 1;
 
 /*
  * Module-private scratch for marginFloor's exact float32-ULP computation.
@@ -399,5 +408,101 @@ export const aabb2 = Object.freeze({
         out2[0] = Math.min(Math.max(px, a0), a2);
         out2[1] = Math.min(Math.max(py, a1), a3);
         return out2;
+    },
+
+    // --- packed 4*N batch ops (X1, see decisions/0005-format-and-batch.md) ---
+    // Operate over a packed Float32Array of N boxes (4*N floats, box i at slots
+    // 4i..4i+3), so a broadphase feed fattens / unions / probes many boxes in one
+    // call without a per-box view. `count` bounds every loop -- a count of 0,
+    // negative, or NaN runs zero iterations (fail closed). The caller owns buffer
+    // length (inPacked.length >= 4*count); an out-of-range read yields NaN, which
+    // propagates. See FORMAT.md for the layout and the packed aliasing rules.
+
+    /**
+     * Fattens each of `count` boxes in `inPacked` by `margin` and writes them
+     * into `outPacked`, box for box. Mirrors `fatten` exactly: subtract `margin`
+     * from the mins, add to the maxes, no auto-clamp (the margin floor stays the
+     * caller's job -- clamp per box with `marginFloor` if you need it). Returns
+     * `outPacked`.
+     *
+     * Aliasing (A1, decisions/0005 D4): `outPacked === inPacked` (in place) is
+     * safe, and a fully-disjoint `outPacked` is safe. A SHIFTED/overlapping view
+     * of `inPacked` is NOT supported -- an element-wise write to box i would
+     * clobber a neighbour's input. Use in-place or a disjoint buffer.
+     * Zero allocations.
+     * @param {Float32Array} outPacked length >= 4*count
+     * @param {Float32Array} inPacked length >= 4*count
+     * @param {number} margin
+     * @param {number} count number of boxes
+     * @returns {Float32Array} `outPacked`
+     */
+    fattenAll(outPacked, inPacked, margin, count) {
+        for (let i = 0; i < count; i++) {
+            const j = i << 2;
+            // Snapshot the box's four slots before writing (in-place safe).
+            const x0 = inPacked[j], y0 = inPacked[j + 1];
+            const x1 = inPacked[j + 2], y1 = inPacked[j + 3];
+            outPacked[j] = x0 - margin;
+            outPacked[j + 1] = y0 - margin;
+            outPacked[j + 2] = x1 + margin;
+            outPacked[j + 3] = y1 + margin;
+        }
+        return outPacked;
+    },
+
+    /**
+     * Unions `count` boxes from `inPacked` into the single box `out4`. Returns
+     * `out4`. Seeded with the canonical empty box, so `count === 0` yields the
+     * empty sentinel `[Inf, Inf, -Inf, -Inf]` (`isEmpty(out4)` is then true) --
+     * the correct bounding box of zero boxes and a valid merge-reduction seed.
+     *
+     * All reads happen before the single terminal write, so `out4` may safely
+     * alias ANYWHERE in `inPacked` (A1, decisions/0005 D4). Zero allocations.
+     * @param {Float32Array} out4 length 4
+     * @param {Float32Array} inPacked length >= 4*count
+     * @param {number} count number of boxes
+     * @returns {Float32Array} `out4`
+     */
+    mergeAll(out4, inPacked, count) {
+        // Accumulate in registers; write out4 once at the end (alias-safe).
+        // Math.min/max (not comparisons) so this folds EXACTLY like `merge`:
+        // NaN propagates instead of being skipped, and the Inf/-Inf seed makes
+        // count === 0 collapse to the empty sentinel.
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (let i = 0; i < count; i++) {
+            const j = i << 2;
+            minX = Math.min(minX, inPacked[j]);
+            minY = Math.min(minY, inPacked[j + 1]);
+            maxX = Math.max(maxX, inPacked[j + 2]);
+            maxY = Math.max(maxY, inPacked[j + 3]);
+        }
+        out4[0] = minX;
+        out4[1] = minY;
+        out4[2] = maxX;
+        out4[3] = maxY;
+        return out4;
+    },
+
+    /**
+     * Returns the lowest index in `[0, count)` whose box in `inPacked`
+     * intersects `b`, or `-1` if none do. Touching edges count as intersecting
+     * (the A-02 convention, the same test as `intersects`). `count === 0`
+     * returns `-1`. Read-only -- `b` may itself be a view into `inPacked`.
+     * Zero allocations.
+     * @param {Float32Array} inPacked length >= 4*count
+     * @param {Float32Array} b length 4
+     * @param {number} count number of boxes
+     * @returns {number} first intersecting index, or -1
+     */
+    intersectsAny(inPacked, b, count) {
+        const b0 = b[0], b1 = b[1], b2 = b[2], b3 = b[3];
+        for (let i = 0; i < count; i++) {
+            const j = i << 2;
+            if (inPacked[j] <= b2 && inPacked[j + 2] >= b0 &&
+                inPacked[j + 1] <= b3 && inPacked[j + 3] >= b1) {
+                return i;
+            }
+        }
+        return -1;
     }
 });

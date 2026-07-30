@@ -10,7 +10,7 @@
 ![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen?style=for-the-badge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-**Zero-GC 2D axis-aligned bounding-box primitives.** Nineteen operations on a flat `Float32Array(4)` — `[minX, minY, maxX, maxY]`. Every op that returns a box writes into a caller-provided `out` buffer. No `new` in your hot loop. No object graphs. ~180 lines of code.
+**Zero-GC 2D axis-aligned bounding-box primitives.** Twenty-two operations on a flat `Float32Array(4)` — `[minX, minY, maxX, maxY]`, including packed `4×N` batch ops. Every op that returns a box writes into a caller-provided `out` buffer. No `new` in your hot loop. No object graphs. ~230 lines of code.
 
 ```js
 import { aabb2 } from '@zakkster/lite-aabb';
@@ -230,6 +230,26 @@ const dx = mouseX - hit[0], dy = mouseY - hit[1];
 if (dx * dx + dy * dy <= r * r) { /* within r of the box */ }
 ```
 
+### Packed `4×N` batch ops — zero allocation *(v2.0.0+)*
+
+A **packed** buffer holds N boxes contiguously in one `Float32Array` of `4×N` floats — box `i` at slots `4i…4i+3`. These ops walk it by index (no per-box `subarray`), so a broadphase can fatten, union, or probe many boxes in a single call. `count` bounds every loop; the caller owns buffer length. See [`FORMAT.md`](FORMAT.md) for the full contract.
+
+| Function | Returns | Description |
+|---|---|---|
+| `aabb2.fattenAll(outPacked, inPacked, margin, count)` | `outPacked` | Fattens each of `count` packed boxes by `margin`, box for box (mirrors `fatten`; no auto-clamp). In place (`outPacked === inPacked`) or a disjoint output only — **not** a shifted view. |
+| `aabb2.mergeAll(out4, inPacked, count)` | `out4` | Unions `count` packed boxes into one. `count === 0` writes the empty sentinel. `out4` may alias anywhere in `inPacked`. |
+| `aabb2.intersectsAny(inPacked, b, count)` | `number` | The lowest index whose packed box intersects `b` (touching counts), or `-1`. `count === 0` returns `-1`. Read-only. |
+
+```js
+const boxes = new Float32Array(4 * n);      // n leaf boxes, packed, allocated once
+// ... fill boxes each frame ...
+aabb2.fattenAll(boxes, boxes, margin, n);   // fatten them all in place
+const bounds = aabb2.mergeAll(scratch4, boxes, n);   // scene bounds in one pass
+const first = aabb2.intersectsAny(boxes, cursorBox, n); // first box under the cursor, or -1
+```
+
+> ⚠️ **`fattenAll` does not accept a shifted output.** `outPacked === inPacked` (in place) and a fully-disjoint `outPacked` are safe; an `outPacked` that is a shifted/partially-overlapping `subarray` of `inPacked` is unsupported, because an element-wise write to box `i` would clobber box `i+1`’s input. `mergeAll` and `intersectsAny` carry no such restriction (they finish all reads before any write / are read-only).
+
 ---
 
 ## Aliasing rules
@@ -251,6 +271,8 @@ aabb2.merge(out, a, b);                        // right result, no corruption
 ```
 
 This holds because every writer (`copy`, `merge`, `extend`, `fatten`) **snapshots all of its array inputs into locals before the first write to `out`** — so a write can never clobber a slot a later read still needs. The locals are register-resident in V8: the guarantee costs no allocation and no measurable time on the hot path (the A/B benchmark is recorded in `decisions/0001-aliasing.md` in the [source repository](https://github.com/PeshoVurtoleta/lite-aabb)).
+
+The **packed batch ops** share this rule only where their write shape allows it: `mergeAll` (all reads precede one terminal write) and the read-only `intersectsAny` let `out`/`b` alias anywhere in `inPacked`, but `fattenAll` writes element by element and therefore accepts only an in-place (`outPacked === inPacked`) or fully-disjoint output — see the [batch-ops callout](#packed-4n-batch-ops--zero-allocation-v200) above and [`FORMAT.md`](FORMAT.md).
 
 > **Before v1.0.2** this was true only for the *identical* view or disjoint buffers; shifted/overlapping views silently corrupted the result (finding A-07). If you are on ≤ 1.0.1, upgrade — the packed-buffer pattern above was broken.
 
@@ -346,7 +368,7 @@ aabb2.set(fat, viewX, viewY, viewX + viewW, viewY + viewH);
 const hits = tree.query(fat, hitBuffer);
 ```
 
-There is **no runtime dependency** between the two packages — they just agree on the buffer format. Use either one alone or both together.
+There is **no runtime dependency** between the two packages — they just agree on the buffer format. That agreement is now a versioned contract, [`FORMAT.md`](FORMAT.md), advertised by the `FORMAT_VERSION` export (both packages ship the same value and compare it for equality). Use either one alone or both together.
 
 ---
 
@@ -372,6 +394,7 @@ The `node:test` unit suite covers:
 | **Degenerate-value law** | `isValid`/`isEmpty`/`setEmpty` tri-state, empty as merge identity, NaN propagation, inverted-box detection |
 | **Precision / margin floor** | exact `marginFloor` ULP values, the A-01 evaporation boundary, the clamp idiom, fail-closed edges |
 | **2D op set** | `containsPoint` edges/agreement-with-`contains`, `distanceSq` touching/disjoint/symmetry, `closestPoint` clamp/idempotence/`out2` aliasing, degenerate-law compliance |
+| **Packed batch ops** | `fattenAll`/`mergeAll`/`intersectsAny` vs per-box loops, `count === 0` identities, `FORMAT_VERSION`, packed aliasing (in-place/disjoint/read-only) |
 | **Zero-allocation guarantee** | mixed ops → heap growth budget under `--expose-gc`, plus per-op `measureAllocs` |
 
 The zero-alloc tests require the `--expose-gc` flag — without it they skip (rather than fail), so CI runs without flags still go green. `npm test` sets the flag for you.
